@@ -6,6 +6,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
 <style>
   :root{
     --ink:#0f172a;
@@ -347,6 +348,35 @@
 
   ::-webkit-scrollbar{width:8px;}
   ::-webkit-scrollbar-thumb{background:#cbd5e1; border-radius:4px;}
+
+  /* ---------- Folder picker modal ---------- */
+  .modal-overlay{
+    position:fixed; inset:0;
+    background:rgba(15,23,42,.45);
+    z-index:2000;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .modal-box{
+    background:#fff; border-radius:10px;
+    width:380px; max-height:70vh;
+    display:flex; flex-direction:column; overflow:hidden;
+    box-shadow:0 10px 40px rgba(0,0,0,.25);
+  }
+  .modal-header{
+    padding:14px 16px; border-bottom:1px solid var(--line);
+    font-size:13px; font-weight:700;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .modal-close{cursor:pointer; color:var(--ink-soft); font-size:18px; background:none; border:none; line-height:1;}
+  .modal-crumbs{padding:8px 16px; font-size:11px; color:var(--ink-soft); border-bottom:1px solid var(--line);}
+  .modal-list{overflow-y:auto; flex:1; min-height:120px;}
+  .modal-item{
+    padding:10px 16px; font-size:13px; cursor:pointer;
+    border-bottom:1px solid #f1f5f9;
+  }
+  .modal-item:hover{background:#f4f8ff;}
+  .modal-footer{padding:12px 16px; border-top:1px solid var(--line); display:flex; gap:8px;}
+  .modal-footer .btn{margin-top:0;}
 </style>
 </head>
 <body>
@@ -355,6 +385,10 @@
   <div class="brand">
     <h1>Control Point Mapper</h1>
     <p>Panoramic capture points &middot; prototype</p>
+    <div id="tcStatus" style="margin-top:8px; font-size:11px; color:var(--ink-soft);">
+      <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#94a3b8;margin-right:5px;"></span>
+      Standalone mode &mdash; not connected to Trimble Connect
+    </div>
   </div>
 
   <div class="step">
@@ -501,6 +535,21 @@
     <button data-base="street">Street</button>
   </div>
   <div id="map"></div>
+</div>
+
+<div id="folderModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>Select image folder</span>
+      <button class="modal-close" id="folderModalClose">&times;</button>
+    </div>
+    <div class="modal-crumbs" id="folderCrumbs">Root</div>
+    <div class="modal-list" id="folderList"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" id="folderModalCancel">Cancel</button>
+      <button class="btn" id="folderModalSelect">Use this folder</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -731,15 +780,161 @@ document.getElementById('csvInput').addEventListener('change', (e)=>{
   reader.readAsText(file);
 });
 
-/* ===================== Folder picker (live-only placeholder) ===================== */
-document.getElementById('browseFolderBtn').addEventListener('click', ()=>{
-  alert(
-    "This needs a live Trimble Connect connection.\n\n" +
-    "Once embedded as a registered extension, this button opens a folder browser built from the Core Files API:\n\n" +
-    "  GET /projects/{projectId}/folders/{folderId}\n\n" +
-    "The user picks the folder containing the pano/ images, its folder ID is stored, and each CSV row's imgname " +
-    "is resolved against that folder (by matching filename) to get a real Trimble Connect file ID for BCF attachments."
-  );
+/* ===================== Trimble Connect Workspace API connection ===================== */
+let TC_API = null;
+let TC_TOKEN = null;
+let TC_PROJECT_ID = null;
+let selectedFolderId = null;
+let lastUploadedIfcId = null;
+
+// NOTE: Trimble Connect's Core API is region-specific (e.g. app21, app41...).
+// Adjust this base URL to match the region your Trimble Connect organization is hosted in
+// if calls below start returning 404s.
+const TC_REGION_BASE = "https://app21.connect.trimble.com/tc/api/2.0";
+
+function setTcStatus(text, color){
+  const el = document.getElementById('tcStatus');
+  el.innerHTML = `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${color};margin-right:5px;"></span>${text}`;
+}
+
+function handleWorkspaceEvent(event, args){
+  if(event === 'extension.accessToken'){
+    TC_TOKEN = (args && args.data && typeof args.data === 'object') ? args.data.accessToken : args.data;
+  } else if(event === 'extension.sessionInvalid'){
+    TC_TOKEN = null;
+    setTcStatus('Session expired &mdash; reopen the extension', '#dc2626');
+  }
+}
+
+async function initExtension(){
+  try{
+    TC_API = await TrimbleConnectWorkspace.connect(window.parent, handleWorkspaceEvent, 15000);
+    const permResult = await TC_API.extension.requestPermission('accesstoken');
+    if(typeof permResult === 'string' && permResult !== 'pending' && permResult !== 'denied'){
+      TC_TOKEN = permResult;
+    }
+    const project = await TC_API.project.getCurrentProject();
+    TC_PROJECT_ID = project.id;
+
+    setTcStatus(`Connected &middot; ${project.name || 'project ' + project.id}`, '#1f7a3e');
+    document.getElementById('uploadBtn').disabled = false;
+    document.getElementById('open3dBtn').disabled = false;
+  } catch(err){
+    // Not running inside Trimble Connect (e.g. opened directly as a standalone file) — stay in standalone mode.
+    console.log('Standalone mode (no Trimble Connect connection):', err && err.message);
+  }
+}
+
+/* ===================== Core Files API helpers ===================== */
+async function tcApiGet(path){
+  const res = await fetch(TC_REGION_BASE + path, {
+    headers: { Authorization: `Bearer ${TC_TOKEN}` }
+  });
+  if(!res.ok) throw new Error(`Trimble Connect API error ${res.status}`);
+  return res.json();
+}
+
+async function getRootFolderId(){
+  const data = await tcApiGet(`/projects/${TC_PROJECT_ID}`);
+  return data.rootId;
+}
+
+async function listFolder(folderId){
+  return tcApiGet(`/folders/${folderId}`);
+}
+
+async function uploadFileToFolder(folderId, filename, content, mime){
+  const createRes = await fetch(`${TC_REGION_BASE}/folders/${folderId}/files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: filename })
+  });
+  if(!createRes.ok) throw new Error(`Could not create file record (${createRes.status})`);
+  const created = await createRes.json();
+  const uploadUrl = created.uploadUrl;
+  const fileId = created.fileId || created.id;
+
+  const putRes = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': mime },
+    body: new Blob([content], { type: mime })
+  });
+  if(!putRes.ok) throw new Error(`File upload failed (${putRes.status})`);
+  return fileId;
+}
+
+/* ===================== Folder picker modal ===================== */
+let folderStack = [];
+
+async function openFolderModal(){
+  document.getElementById('folderModal').classList.remove('hidden');
+  try{
+    const rootId = await getRootFolderId();
+    folderStack = [{ id: rootId, name: 'Root' }];
+    await renderFolderModal();
+  } catch(err){
+    document.getElementById('folderList').innerHTML = `<div class="modal-item">Couldn't reach Trimble Connect: ${err.message}</div>`;
+  }
+}
+
+async function renderFolderModal(){
+  const current = folderStack[folderStack.length - 1];
+  document.getElementById('folderCrumbs').textContent = folderStack.map(f => f.name).join(' / ');
+  const listEl = document.getElementById('folderList');
+  listEl.innerHTML = '<div class="modal-item">Loading&hellip;</div>';
+  try{
+    const data = await listFolder(current.id);
+    listEl.innerHTML = '';
+    if(folderStack.length > 1){
+      const up = document.createElement('div');
+      up.className = 'modal-item';
+      up.textContent = '.. (up one level)';
+      up.onclick = () => { folderStack.pop(); renderFolderModal(); };
+      listEl.appendChild(up);
+    }
+    const folders = (data.folders || data.items || []).filter(f => !f.type || f.type === 'FOLDER');
+    if(!folders.length){
+      const empty = document.createElement('div');
+      empty.className = 'modal-item';
+      empty.style.color = 'var(--ink-soft)';
+      empty.textContent = 'No subfolders here.';
+      listEl.appendChild(empty);
+    }
+    folders.forEach(f => {
+      const item = document.createElement('div');
+      item.className = 'modal-item';
+      item.textContent = '\uD83D\uDCC1 ' + f.name;
+      item.onclick = () => { folderStack.push({ id: f.id, name: f.name }); renderFolderModal(); };
+      listEl.appendChild(item);
+    });
+  } catch(err){
+    listEl.innerHTML = `<div class="modal-item">Couldn't load folder contents: ${err.message}</div>`;
+  }
+}
+
+document.getElementById('folderModalSelect').addEventListener('click', () => {
+  const current = folderStack[folderStack.length - 1];
+  selectedFolderId = current.id;
+  document.getElementById('tcFolderPath').value = folderStack.map(f => f.name).join(' / ');
+  document.getElementById('folderModal').classList.add('hidden');
+});
+document.getElementById('folderModalCancel').addEventListener('click', () => {
+  document.getElementById('folderModal').classList.add('hidden');
+});
+document.getElementById('folderModalClose').addEventListener('click', () => {
+  document.getElementById('folderModal').classList.add('hidden');
+});
+
+document.getElementById('browseFolderBtn').addEventListener('click', () => {
+  if(TC_TOKEN && TC_PROJECT_ID){
+    openFolderModal();
+  } else {
+    alert(
+      "Not connected to Trimble Connect right now.\n\n" +
+      "This works once the extension is opened inside a real Trimble Connect project " +
+      "(it needs to load inside the iframe and receive an access token)."
+    );
+  }
 });
 
 /* ===================== IFC generation (real, runs client-side) ===================== */
@@ -921,9 +1116,45 @@ document.getElementById('genBcfBtn').addEventListener('click', async ()=>{
   }
 });
 
-/* ===================== Live-only integration notes ===================== */
-document.getElementById('uploadBtn').addEventListener('click', ()=>{});
-document.getElementById('open3dBtn').addEventListener('click', ()=>{});
+/* ===================== Upload to Trimble Connect ===================== */
+document.getElementById('uploadBtn').addEventListener('click', async () => {
+  if(!TC_TOKEN){ alert('Not connected to Trimble Connect yet.'); return; }
+  if(!currentPoints.length){ alert('No points loaded.'); return; }
+
+  const btn = document.getElementById('uploadBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Uploading&hellip;';
+  try{
+    const diameter = parseFloat(document.getElementById('diamSlider').value);
+    const ifcText = generateIFC(currentPoints, diameter);
+    const targetFolder = selectedFolderId || await getRootFolderId();
+    lastUploadedIfcId = await uploadFileToFolder(targetFolder, 'Panorama.ifc', ifcText, 'application/x-step');
+    alert('Panorama.ifc uploaded to Trimble Connect Explorer.');
+  } catch(err){
+    alert(
+      'Upload failed: ' + err.message + '\n\n' +
+      'This calls Trimble\'s documented two-step upload pattern (create file record, then PUT the bytes). ' +
+      'If the response shape differs for your org/region, this is the function to adjust: uploadFileToFolder().'
+    );
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+});
+
+/* ===================== Open in 3D Viewer ===================== */
+document.getElementById('open3dBtn').addEventListener('click', () => {
+  if(!TC_PROJECT_ID){ alert('Not connected to Trimble Connect yet.'); return; }
+  if(!lastUploadedIfcId){
+    alert('Upload Panorama.ifc to Trimble Connect first \u2014 then this button opens it directly in the 3D Viewer.');
+    return;
+  }
+  window.open(`https://web.connect.trimble.com/projects/${TC_PROJECT_ID}/viewer/3d?modelId=${lastUploadedIfcId}`, '_blank');
+});
+
+/* ===================== Kick off Trimble Connect handshake ===================== */
+initExtension();
 
 /* ===================== Bootstrap with sample data ===================== */
 const SAMPLE_CSV = `#timestamp imgname x y z qx qy qz qw
