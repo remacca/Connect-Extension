@@ -1,0 +1,6 @@
+{
+  "title": "Panorama Control Point Mapper",
+  "url": "https://remacca.github.io/Connect-Extension/control-point-mapper.html",
+  "description": "Plot panoramic capture points on satellite imagery, generate an IFC of point markers, and create BCF topics referencing each panorama image.",
+  "enabled": true
+}
