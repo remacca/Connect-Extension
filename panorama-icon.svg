@@ -1,4 +1,4 @@
-<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#000000" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
   <path d="M30,60 Q100,92 170,60"/>
   <path d="M30,140 Q100,108 170,140"/>
   <line x1="30" y1="60" x2="30" y2="140"/>
