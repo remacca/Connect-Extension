@@ -398,8 +398,9 @@
     </div>
     <label class="file-drop" id="dropZone">
       <input type="file" id="csvInput" accept=".csv,.txt" />
-      <span><strong>Choose a CSV</strong> or drop it here<br/>space-delimited &middot; <code>timestamp imgname x y z qx qy qz qw</code></span>
+      <span><strong>Choose a CSV</strong></span>
     </label>
+    <button class="btn secondary" id="browseCsvBtn" style="margin-top:8px;" disabled>Select CSV from Trimble Connect <span class="live-badge">Live only</span></button>
     <div class="stat-row"><span>Loaded points</span><b id="statCount">&mdash;</b></div>
     <div class="stat-row"><span>Source</span><b id="statSource">sample data</b></div>
 
@@ -558,6 +559,20 @@
     <div class="modal-footer">
       <button class="btn secondary" id="folderModalCancel">Cancel</button>
       <button class="btn" id="folderModalSelect">Use this folder</button>
+    </div>
+  </div>
+</div>
+
+<div id="csvModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>Select CSV file</span>
+      <button class="modal-close" id="csvModalClose">&times;</button>
+    </div>
+    <div class="modal-crumbs" id="csvCrumbs">Root</div>
+    <div class="modal-list" id="csvList"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" id="csvModalCancel">Cancel</button>
     </div>
   </div>
 </div>
@@ -797,14 +812,33 @@ let TC_PROJECT_ID = null;
 let selectedFolderId = null;
 let lastUploadedIfcId = null;
 
-// NOTE: Trimble Connect's Core API is region-specific (e.g. app21, app41...).
-// Adjust this base URL to match the region your Trimble Connect organization is hosted in
-// if calls below start returning 404s.
-const TC_REGION_BASE = "https://app21.connect.trimble.com/tc/api/2.0";
+// Trimble Connect's Core API is region-specific (each project lives in exactly one region).
+// Rather than hardcoding a region, we discover the correct one at runtime — see resolveRegionBase() below.
+let TC_REGION_BASE = null;
+const REGION_DISCOVERY_URL = "https://app.connect.trimble.com/tc/api/2.0/regions";
 
 function setTcStatus(text, color){
   const el = document.getElementById('tcStatus');
   el.innerHTML = `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${color};margin-right:5px;"></span>${text}`;
+}
+
+async function resolveRegionBase(projectId, token){
+  const res = await fetch(REGION_DISCOVERY_URL);
+  if(!res.ok) throw new Error(`Could not fetch region list (${res.status})`);
+  const regions = await res.json();
+
+  for(const region of regions){
+    const base = region['tc-api'].replace(/\/$/, ''); // strip trailing slash
+    try{
+      const testRes = await fetch(`${base}/projects/${projectId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if(testRes.ok) return base;
+    } catch(e){
+      // this region didn't have the project (or errored) — try the next one
+    }
+  }
+  throw new Error('Project not found in any known Trimble Connect region.');
 }
 
 function handleWorkspaceEvent(event, args){
@@ -839,9 +873,17 @@ async function initExtension(){
     const project = await TC_API.project.getCurrentProject();
     TC_PROJECT_ID = project.id;
 
-    setTcStatus(`Connected &middot; ${project.name || 'project ' + project.id}`, '#1f7a3e');
-    document.getElementById('uploadBtn').disabled = false;
-    document.getElementById('open3dBtn').disabled = false;
+    setTcStatus(`Connected &middot; ${project.name || 'project ' + project.id} &middot; finding region&hellip;`, '#1f7a3e');
+
+    try{
+      TC_REGION_BASE = await resolveRegionBase(TC_PROJECT_ID, TC_TOKEN);
+      setTcStatus(`Connected &middot; ${project.name || 'project ' + project.id}`, '#1f7a3e');
+      document.getElementById('uploadBtn').disabled = false;
+      document.getElementById('open3dBtn').disabled = false;
+      document.getElementById('browseCsvBtn').disabled = false;
+    } catch(regionErr){
+      setTcStatus(`Connected, but couldn't resolve API region: ${regionErr.message}`, '#dc2626');
+    }
   } catch(err){
     // Not running inside Trimble Connect (e.g. opened directly as a standalone file) — stay in standalone mode.
     console.log('Standalone mode (no Trimble Connect connection):', err && err.message);
@@ -948,8 +990,121 @@ document.getElementById('folderModalClose').addEventListener('click', () => {
   document.getElementById('folderModal').classList.add('hidden');
 });
 
+/* ===================== Download a file's content (best-effort — see note) ===================== */
+// NOTE: unlike the region-discovery and upload endpoints above, this download path isn't confirmed
+// against Trimble's docs (their API reference blocks automated access). It tries the most likely
+// REST convention first, with a fallback. If both fail, the error message will show the actual
+// HTTP status so this can be corrected against a real response.
+async function downloadFileContent(fileId){
+  const metaRes = await fetch(`${TC_REGION_BASE}/files/${fileId}`, {
+    headers: { Authorization: `Bearer ${TC_TOKEN}` }
+  });
+  if(metaRes.ok){
+    const meta = await metaRes.json();
+    if(meta.downloadUrl){
+      const dlRes = await fetch(meta.downloadUrl);
+      if(dlRes.ok) return dlRes.text();
+    }
+  }
+  // Fallback: direct binary-download convention
+  const directRes = await fetch(`${TC_REGION_BASE}/files/${fileId}/data`, {
+    headers: { Authorization: `Bearer ${TC_TOKEN}` }
+  });
+  if(!directRes.ok) throw new Error(`Could not download file content (${directRes.status})`);
+  return directRes.text();
+}
+
+/* ===================== CSV file picker modal ===================== */
+let csvFolderStack = [];
+
+async function openCsvModal(){
+  document.getElementById('csvModal').classList.remove('hidden');
+  try{
+    const rootId = await getRootFolderId();
+    csvFolderStack = [{ id: rootId, name: 'Root' }];
+    await renderCsvModal();
+  } catch(err){
+    document.getElementById('csvList').innerHTML = `<div class="modal-item">Couldn't reach Trimble Connect: ${err.message}</div>`;
+  }
+}
+
+async function renderCsvModal(){
+  const current = csvFolderStack[csvFolderStack.length - 1];
+  document.getElementById('csvCrumbs').textContent = csvFolderStack.map(f => f.name).join(' / ');
+  const listEl = document.getElementById('csvList');
+  listEl.innerHTML = '<div class="modal-item">Loading&hellip;</div>';
+  try{
+    const data = await listFolder(current.id);
+    listEl.innerHTML = '';
+    if(csvFolderStack.length > 1){
+      const up = document.createElement('div');
+      up.className = 'modal-item';
+      up.textContent = '.. (up one level)';
+      up.onclick = () => { csvFolderStack.pop(); renderCsvModal(); };
+      listEl.appendChild(up);
+    }
+    const folders = (data.folders || []);
+    const files = (data.files || []).filter(f => /\.(csv|txt)$/i.test(f.name));
+
+    folders.forEach(f => {
+      const item = document.createElement('div');
+      item.className = 'modal-item';
+      item.textContent = '\uD83D\uDCC1 ' + f.name;
+      item.onclick = () => { csvFolderStack.push({ id: f.id, name: f.name }); renderCsvModal(); };
+      listEl.appendChild(item);
+    });
+    files.forEach(f => {
+      const item = document.createElement('div');
+      item.className = 'modal-item';
+      item.style.fontWeight = '600';
+      item.style.color = 'var(--accent-dark)';
+      item.textContent = '\uD83D\uDCC4 ' + f.name;
+      item.onclick = () => selectCsvFile(f);
+      listEl.appendChild(item);
+    });
+    if(!folders.length && !files.length){
+      const empty = document.createElement('div');
+      empty.className = 'modal-item';
+      empty.style.color = 'var(--ink-soft)';
+      empty.textContent = 'Nothing here (no subfolders or .csv/.txt files).';
+      listEl.appendChild(empty);
+    }
+  } catch(err){
+    listEl.innerHTML = `<div class="modal-item">Couldn't load folder contents: ${err.message}</div>`;
+  }
+}
+
+async function selectCsvFile(file){
+  const listEl = document.getElementById('csvList');
+  listEl.innerHTML = `<div class="modal-item">Downloading ${file.name}&hellip;</div>`;
+  try{
+    const text = await downloadFileContent(file.id);
+    currentPoints = parseCsv(text);
+    document.getElementById('statSource').textContent = file.name;
+    renderPoints();
+    document.getElementById('csvModal').classList.add('hidden');
+  } catch(err){
+    listEl.innerHTML = `<div class="modal-item">Couldn't download ${file.name}: ${err.message}</div>`;
+  }
+}
+
+document.getElementById('csvModalCancel').addEventListener('click', () => {
+  document.getElementById('csvModal').classList.add('hidden');
+});
+document.getElementById('csvModalClose').addEventListener('click', () => {
+  document.getElementById('csvModal').classList.add('hidden');
+});
+
+document.getElementById('browseCsvBtn').addEventListener('click', () => {
+  if(TC_TOKEN && TC_PROJECT_ID && TC_REGION_BASE){
+    openCsvModal();
+  } else {
+    alert('Not connected to Trimble Connect right now.');
+  }
+});
+
 document.getElementById('browseFolderBtn').addEventListener('click', () => {
-  if(TC_TOKEN && TC_PROJECT_ID){
+  if(TC_TOKEN && TC_PROJECT_ID && TC_REGION_BASE){
     openFolderModal();
   } else {
     alert(
@@ -1184,10 +1339,10 @@ document.getElementById('open3dBtn').addEventListener('click', () => {
 });
 
 /* ===================== BCF Topics API (live) ===================== */
-const TOPICS_BASE = TC_REGION_BASE + '/bcf/2.1';
+function topicsBase(){ return TC_REGION_BASE + '/bcf/2.1'; }
 
 async function createBcfTopicLive(rec){
-  const topicRes = await fetch(`${TOPICS_BASE}/projects/${TC_PROJECT_ID}/topics`, {
+  const topicRes = await fetch(`${topicsBase()}/projects/${TC_PROJECT_ID}/topics`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: `Panorama ${rec.ts}`, topic_type: 'Comment', topic_status: 'Open' })
@@ -1195,7 +1350,7 @@ async function createBcfTopicLive(rec){
   if(!topicRes.ok) throw new Error(`topic create failed (${topicRes.status})`);
   const topic = await topicRes.json();
 
-  const vpRes = await fetch(`${TOPICS_BASE}/projects/${TC_PROJECT_ID}/topics/${topic.guid}/viewpoints`, {
+  const vpRes = await fetch(`${topicsBase()}/projects/${TC_PROJECT_ID}/topics/${topic.guid}/viewpoints`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1210,7 +1365,7 @@ async function createBcfTopicLive(rec){
   });
   if(!vpRes.ok) throw new Error(`viewpoint create failed (${vpRes.status})`);
 
-  const commentRes = await fetch(`${TOPICS_BASE}/projects/${TC_PROJECT_ID}/topics/${topic.guid}/comments`, {
+  const commentRes = await fetch(`${topicsBase()}/projects/${TC_PROJECT_ID}/topics/${topic.guid}/comments`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ comment: `Panorama image: ${rec.img}` })
