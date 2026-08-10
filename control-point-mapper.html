@@ -909,7 +909,7 @@ async function getRootFolderId(){
 }
 
 async function listFolder(folderId){
-  return tcApiGet(`/folders/${folderId}`);
+  return tcApiGet(`/folders/${folderId}/items`);
 }
 
 // The exact shape of a folder-listing response isn't confirmed against Trimble's docs
