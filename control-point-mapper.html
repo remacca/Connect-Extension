@@ -1038,26 +1038,51 @@ document.getElementById('folderModalClose').addEventListener('click', () => {
 
 /* ===================== Download a file's content (best-effort — see note) ===================== */
 // NOTE: unlike the region-discovery and upload endpoints above, this download path isn't confirmed
-// against Trimble's docs (their API reference blocks automated access). It tries the most likely
-// REST convention first, with a fallback. If both fail, the error message will show the actual
-// HTTP status so this can be corrected against a real response.
+// against Trimble's docs (their API reference blocks automated access). On failure this surfaces
+// exactly which step failed and the file's raw metadata, rather than a flat error — that detail is
+// what should get pasted back to fix this precisely instead of guessing again.
 async function downloadFileContent(fileId){
-  const metaRes = await fetch(`${TC_REGION_BASE}/files/${fileId}`, {
-    headers: { Authorization: `Bearer ${TC_TOKEN}` }
-  });
-  if(metaRes.ok){
-    const meta = await metaRes.json();
-    if(meta.downloadUrl){
-      const dlRes = await fetch(meta.downloadUrl);
-      if(dlRes.ok) return dlRes.text();
-    }
+  let meta;
+  try{
+    const metaRes = await fetch(`${TC_REGION_BASE}/files/${fileId}`, {
+      headers: { Authorization: `Bearer ${TC_TOKEN}` }
+    });
+    if(!metaRes.ok) throw new Error(`metadata request failed (${metaRes.status})`);
+    meta = await metaRes.json();
+  } catch(err){
+    throw new Error(`Could not fetch file metadata: ${err.message}`);
   }
-  // Fallback: direct binary-download convention
-  const directRes = await fetch(`${TC_REGION_BASE}/files/${fileId}/data`, {
-    headers: { Authorization: `Bearer ${TC_TOKEN}` }
-  });
-  if(!directRes.ok) throw new Error(`Could not download file content (${directRes.status})`);
-  return directRes.text();
+
+  const downloadUrl = meta.downloadUrl || meta.url || meta.contentUrl ||
+    (Array.isArray(meta.versions) && meta.versions[0] && meta.versions[0].downloadUrl);
+
+  let downloadUrlError = null;
+  if(downloadUrl){
+    try{
+      const dlRes = await fetch(downloadUrl);
+      if(dlRes.ok) return await dlRes.text();
+      downloadUrlError = `returned ${dlRes.status}`;
+    } catch(err){
+      downloadUrlError = `${err.message} (likely CORS — the download URL's host may not allow direct browser fetches)`;
+    }
+  } else {
+    downloadUrlError = 'no downloadUrl/url/contentUrl field found in metadata';
+  }
+
+  try{
+    const directRes = await fetch(`${TC_REGION_BASE}/files/${fileId}/data`, {
+      headers: { Authorization: `Bearer ${TC_TOKEN}` }
+    });
+    if(directRes.ok) return await directRes.text();
+    throw new Error(`/data endpoint returned ${directRes.status}`);
+  } catch(err){
+    const metaDump = JSON.stringify(meta, null, 2).slice(0, 1200);
+    throw new Error(
+      `Download URL attempt: ${downloadUrlError}\n` +
+      `Direct /data attempt: ${err.message}\n\n` +
+      `File metadata (copy this back for a fix):\n${metaDump}`
+    );
+  }
 }
 
 /* ===================== CSV file picker modal ===================== */
@@ -1141,7 +1166,16 @@ async function selectCsvFile(file){
     renderPoints();
     document.getElementById('csvModal').classList.add('hidden');
   } catch(err){
-    listEl.innerHTML = `<div class="modal-item">Couldn't download ${file.name}: ${err.message}</div>`;
+    listEl.innerHTML = '';
+    const warn = document.createElement('div');
+    warn.className = 'modal-item';
+    warn.style.color = '#dc2626';
+    warn.textContent = `Couldn't download ${file.name}:`;
+    listEl.appendChild(warn);
+    const pre = document.createElement('pre');
+    pre.style.cssText = 'font-size:10px; padding:8px 16px; white-space:pre-wrap; word-break:break-all; color:var(--ink-soft); margin:0;';
+    pre.textContent = err.message;
+    listEl.appendChild(pre);
   }
 }
 
