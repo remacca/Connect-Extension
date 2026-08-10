@@ -520,7 +520,17 @@
 
     <button class="btn secondary" id="uploadBtn" disabled>Upload to Trimble Connect Explorer <span class="live-badge">Live only</span></button>
     <button class="btn secondary" id="open3dBtn" style="margin-top:8px;" disabled>Open in 3D Viewer <span class="live-badge">Live only</span></button>
-    <div class="hint" style="margin-top:8px;">These two need a live project connection (Files API upload + ViewerAPI). Wired up and ready &mdash; see the integration notes below.</div>
+
+    <div class="field" style="margin-top:14px;">
+      <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-size:12px;">
+        <input type="checkbox" id="bcfTestMode" checked style="width:auto;">
+        Test mode &mdash; only create topics for the first 5 points
+      </label>
+    </div>
+    <button class="btn secondary" id="createBcfBtn" disabled>Create BCF topics in Trimble Connect <span class="live-badge">Live only</span></button>
+    <div class="hint" id="bcfProgressHint" style="margin-top:6px;">Creates one BCF topic per point, linked to the uploaded IFC's point objects. Requires uploading Panorama.ifc first.</div>
+
+    <div class="hint" style="margin-top:8px;">These need a live project connection (Files API upload + ViewerAPI + Topics API).</div>
   </div>
 
   <div class="footer-note">
@@ -803,12 +813,25 @@ function handleWorkspaceEvent(event, args){
   } else if(event === 'extension.sessionInvalid'){
     TC_TOKEN = null;
     setTcStatus('Session expired &mdash; reopen the extension', '#dc2626');
+  } else if(event === 'extension.command'){
+    // Fired when the user clicks the "Panoramas" nav item while already open — nothing extra to do.
   }
 }
+
+// Hosted alongside control-point-mapper.html in the same repo/Pages site.
+const PANORAMA_ICON_URL = 'https://remacca.github.io/Connect-Extension/panorama-icon.svg';
 
 async function initExtension(){
   try{
     TC_API = await TrimbleConnectWorkspace.connect(window.parent, handleWorkspaceEvent, 15000);
+
+    // Register this extension's entry in Trimble Connect's left navigation.
+    TC_API.ui.setMenu({
+      title: 'Panoramas',
+      icon: PANORAMA_ICON_URL,
+      command: 'PANORAMAS_OPEN'
+    });
+
     const permResult = await TC_API.extension.requestPermission('accesstoken');
     if(typeof permResult === 'string' && permResult !== 'pending' && permResult !== 'denied'){
       TC_TOKEN = permResult;
@@ -950,6 +973,7 @@ function generateIFC(points, diameter){
   if(!points.length) return null;
   let id = 0;
   const lines = [];
+  const records = []; // {ts, img, x, y, z (local, matching this IFC's placement), guid}
   const E = (def)=>{ id++; lines.push('#'+id+'='+def+';'); return id; };
 
   const baseX = points[0].x, baseY = points[0].y;
@@ -1004,8 +1028,10 @@ function generateIFC(points, diameter){
     const repId     = E(`IFCSHAPEREPRESENTATION(#${contextId},'Body','SweptSolid',(#${solidId}))`);
     const shapeId   = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${repId}))`);
 
-    const proxyId = E(`IFCBUILDINGELEMENTPROXY(${stepStr(ifcGuid())},#${ownerId},${stepStr(p.ts)},$,'PanoramaPoint',#${lpId},#${shapeId},$,$)`);
+    const proxyGuid = ifcGuid();
+    const proxyId = E(`IFCBUILDINGELEMENTPROXY(${stepStr(proxyGuid)},#${ownerId},${stepStr(p.ts)},$,'PanoramaPoint',#${lpId},#${shapeId},$,$)`);
     proxyIds.push(proxyId);
+    records.push({ ts: p.ts, img: p.img, x: lx, y: ly, z: lz, guid: proxyGuid });
 
     const pE  = E(`IFCPROPERTYSINGLEVALUE('Easting',$,IFCLENGTHMEASURE(${p.x.toFixed(4)}),$)`);
     const pN  = E(`IFCPROPERTYSINGLEVALUE('Northing',$,IFCLENGTHMEASURE(${p.y.toFixed(4)}),$)`);
@@ -1030,7 +1056,7 @@ function generateIFC(points, diameter){
   ].join('\n');
   const footer = '\nENDSEC;\n\nEND-ISO-10303-21;\n';
 
-  return header + '\n' + lines.join('\n') + footer;
+  return { text: header + '\n' + lines.join('\n') + footer, records };
 }
 
 /* ===================== BCF topic generation (real, runs client-side) ===================== */
@@ -1097,8 +1123,8 @@ function downloadBlob(content, filename, mime){
 document.getElementById('genIfcBtn').addEventListener('click', ()=>{
   if(!currentPoints.length){ alert('No points loaded.'); return; }
   const diameter = parseFloat(document.getElementById('diamSlider').value);
-  const ifcText = generateIFC(currentPoints, diameter);
-  downloadBlob(ifcText, 'Panorama.ifc', 'application/x-step');
+  const result = generateIFC(currentPoints, diameter);
+  downloadBlob(result.text, 'Panorama.ifc', 'application/x-step');
 });
 
 document.getElementById('genBcfBtn').addEventListener('click', async ()=>{
@@ -1116,6 +1142,8 @@ document.getElementById('genBcfBtn').addEventListener('click', async ()=>{
   }
 });
 
+let lastIfcPointRecords = null;
+
 /* ===================== Upload to Trimble Connect ===================== */
 document.getElementById('uploadBtn').addEventListener('click', async () => {
   if(!TC_TOKEN){ alert('Not connected to Trimble Connect yet.'); return; }
@@ -1127,9 +1155,11 @@ document.getElementById('uploadBtn').addEventListener('click', async () => {
   btn.innerHTML = '<span class="spin"></span>Uploading&hellip;';
   try{
     const diameter = parseFloat(document.getElementById('diamSlider').value);
-    const ifcText = generateIFC(currentPoints, diameter);
+    const result = generateIFC(currentPoints, diameter);
     const targetFolder = selectedFolderId || await getRootFolderId();
-    lastUploadedIfcId = await uploadFileToFolder(targetFolder, 'Panorama.ifc', ifcText, 'application/x-step');
+    lastUploadedIfcId = await uploadFileToFolder(targetFolder, 'Panorama.ifc', result.text, 'application/x-step');
+    lastIfcPointRecords = result.records;
+    document.getElementById('createBcfBtn').disabled = false;
     alert('Panorama.ifc uploaded to Trimble Connect Explorer.');
   } catch(err){
     alert(
@@ -1151,6 +1181,78 @@ document.getElementById('open3dBtn').addEventListener('click', () => {
     return;
   }
   window.open(`https://web.connect.trimble.com/projects/${TC_PROJECT_ID}/viewer/3d?modelId=${lastUploadedIfcId}`, '_blank');
+});
+
+/* ===================== BCF Topics API (live) ===================== */
+const TOPICS_BASE = TC_REGION_BASE + '/bcf/2.1';
+
+async function createBcfTopicLive(rec){
+  const topicRes = await fetch(`${TOPICS_BASE}/projects/${TC_PROJECT_ID}/topics`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: `Panorama ${rec.ts}`, topic_type: 'Comment', topic_status: 'Open' })
+  });
+  if(!topicRes.ok) throw new Error(`topic create failed (${topicRes.status})`);
+  const topic = await topicRes.json();
+
+  const vpRes = await fetch(`${TOPICS_BASE}/projects/${TC_PROJECT_ID}/topics/${topic.guid}/viewpoints`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      perspective_camera: {
+        camera_view_point: { x: rec.x, y: rec.y, z: rec.z + 1.6 },
+        camera_direction: { x: 0, y: 1, z: 0 },
+        camera_up_vector: { x: 0, y: 0, z: 1 },
+        field_of_view: 60
+      },
+      components: { selection: [{ ifc_guid: rec.guid }] }
+    })
+  });
+  if(!vpRes.ok) throw new Error(`viewpoint create failed (${vpRes.status})`);
+
+  const commentRes = await fetch(`${TOPICS_BASE}/projects/${TC_PROJECT_ID}/topics/${topic.guid}/comments`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ comment: `Panorama image: ${rec.img}` })
+  });
+  if(!commentRes.ok) throw new Error(`comment create failed (${commentRes.status})`);
+
+  return topic.guid;
+}
+
+document.getElementById('createBcfBtn').addEventListener('click', async () => {
+  if(!TC_TOKEN){ alert('Not connected to Trimble Connect yet.'); return; }
+  if(!lastUploadedIfcId || !lastIfcPointRecords){
+    alert('Upload Panorama.ifc to Trimble Connect first \u2014 these topics link back to that upload\'s point objects.');
+    return;
+  }
+
+  const testMode = document.getElementById('bcfTestMode').checked;
+  const records = testMode ? lastIfcPointRecords.slice(0, 5) : lastIfcPointRecords;
+
+  if(!testMode && records.length > 50){
+    if(!confirm(`This will create ${records.length} BCF topics (3 API calls each, ~${records.length*3} requests). This can take a while. Continue?`)) return;
+  }
+
+  const btn = document.getElementById('createBcfBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  let created = 0, failed = 0;
+
+  for(const rec of records){
+    try{
+      await createBcfTopicLive(rec);
+      created++;
+    } catch(err){
+      failed++;
+      console.error('BCF topic failed for', rec.ts, err);
+    }
+    btn.innerHTML = `<span class="spin"></span>${created+failed}/${records.length}`;
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = original;
+  alert(`Created ${created} BCF topic${created===1?'':'s'} in Trimble Connect${failed ? `, ${failed} failed (see browser console for details)` : ''}.`);
 });
 
 /* ===================== Kick off Trimble Connect handshake ===================== */
