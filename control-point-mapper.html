@@ -400,12 +400,12 @@
       <input type="file" id="csvInput" accept=".csv,.txt" />
       <span><strong>Choose a CSV</strong></span>
     </label>
-    <button class="btn secondary" id="browseCsvBtn" style="margin-top:8px;" disabled>Select CSV from Trimble Connect <span class="live-badge">Live only</span></button>
+    <button class="btn secondary" id="browseCsvBtn" style="margin-top:8px;" disabled>Select CSV from Trimble Connect <span class="live-badge" id="csvLiveBadge">Live only</span></button>
     <div class="stat-row"><span>Loaded points</span><b id="statCount">&mdash;</b></div>
     <div class="stat-row"><span>Source</span><b id="statSource">sample data</b></div>
 
     <div class="field" style="margin-top:14px;">
-      <label>Image folder in Trimble Connect<span class="live-badge">Live only</span></label>
+      <label>Image folder in Trimble Connect<span class="live-badge" id="folderLiveBadge">Live only</span></label>
       <input type="text" id="tcFolderPath" placeholder="Not connected to a Trimble Connect project" disabled>
       <button class="btn secondary" id="browseFolderBtn" style="margin-top:6px;">Browse Trimble Connect folder&hellip;</button>
       <div class="hint">Resolves each row's <code>imgname</code> (e.g. <code>pano/&hellip;.jpg</code>) against a real folder in your project via the Files API. Only available when this runs as a connected extension &mdash; see the note at the bottom.</div>
@@ -519,8 +519,8 @@
     </div>
     <div class="hint" style="margin:8px 0 12px;">Both build real files from the plotted points using the current projection and diameter, and download straight to your machine &mdash; no Trimble Connect connection needed for this step.</div>
 
-    <button class="btn secondary" id="uploadBtn" disabled>Upload to Trimble Connect Explorer <span class="live-badge">Live only</span></button>
-    <button class="btn secondary" id="open3dBtn" style="margin-top:8px;" disabled>Open in 3D Viewer <span class="live-badge">Live only</span></button>
+    <button class="btn secondary" id="uploadBtn" disabled>Upload to Trimble Connect Explorer <span class="live-badge" id="uploadLiveBadge">Live only</span></button>
+    <button class="btn secondary" id="open3dBtn" style="margin-top:8px;" disabled>Open in 3D Viewer <span class="live-badge" id="viewerLiveBadge">Live only</span></button>
 
     <div class="field" style="margin-top:14px;">
       <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-size:12px;">
@@ -528,7 +528,7 @@
         Test mode &mdash; only create topics for the first 5 points
       </label>
     </div>
-    <button class="btn secondary" id="createBcfBtn" disabled>Create BCF topics in Trimble Connect <span class="live-badge">Live only</span></button>
+    <button class="btn secondary" id="createBcfBtn" disabled>Create BCF topics in Trimble Connect <span class="live-badge" id="bcfLiveBadge">Live only</span></button>
     <div class="hint" id="bcfProgressHint" style="margin-top:6px;">Creates one BCF topic per point, linked to the uploaded IFC's point objects. Requires uploading Panorama.ifc first.</div>
 
     <div class="hint" style="margin-top:8px;">These need a live project connection (Files API upload + ViewerAPI + Topics API).</div>
@@ -881,6 +881,10 @@ async function initExtension(){
       document.getElementById('uploadBtn').disabled = false;
       document.getElementById('open3dBtn').disabled = false;
       document.getElementById('browseCsvBtn').disabled = false;
+      ['folderLiveBadge','csvLiveBadge','uploadLiveBadge','viewerLiveBadge'].forEach(id=>{
+        const b = document.getElementById(id);
+        if(b){ b.textContent = 'Connected'; b.style.background = '#d1fae5'; b.style.color = '#065f46'; }
+      });
     } catch(regionErr){
       setTcStatus(`Connected, but couldn't resolve API region: ${regionErr.message}`, '#dc2626');
     }
@@ -906,6 +910,36 @@ async function getRootFolderId(){
 
 async function listFolder(folderId){
   return tcApiGet(`/folders/${folderId}`);
+}
+
+// The exact shape of a folder-listing response isn't confirmed against Trimble's docs
+// (their API reference blocks automated access), so this tries several plausible shapes
+// and, if none match, surfaces the raw response instead of silently showing nothing —
+// that raw output is what should get pasted back so this can be corrected precisely.
+function extractChildren(data){
+  let items = null;
+  if(Array.isArray(data)) items = data;
+  else if(Array.isArray(data.items)) items = data.items;
+  else if(Array.isArray(data.data)) items = data.data;
+  else if(Array.isArray(data.children)) items = data.children;
+
+  if(items){
+    const isFolder = (i) => {
+      const t = (i.type || i.kind || i.itemType || i.entityType || '').toString().toUpperCase();
+      return t.includes('FOLDER');
+    };
+    const isFile = (i) => {
+      const t = (i.type || i.kind || i.itemType || i.entityType || '').toString().toUpperCase();
+      if(t.includes('FILE')) return true;
+      if(!t && i.name) return /\.[a-z0-9]+$/i.test(i.name); // fallback: has a file extension
+      return false;
+    };
+    return { folders: items.filter(isFolder), files: items.filter(isFile), matched: true, raw: data };
+  }
+  if(Array.isArray(data.folders) || Array.isArray(data.files)){
+    return { folders: data.folders || [], files: data.files || [], matched: true, raw: data };
+  }
+  return { folders: [], files: [], matched: false, raw: data };
 }
 
 async function uploadFileToFolder(folderId, filename, content, mime){
@@ -949,6 +983,7 @@ async function renderFolderModal(){
   listEl.innerHTML = '<div class="modal-item">Loading&hellip;</div>';
   try{
     const data = await listFolder(current.id);
+    const { folders, matched, raw } = extractChildren(data);
     listEl.innerHTML = '';
     if(folderStack.length > 1){
       const up = document.createElement('div');
@@ -957,7 +992,18 @@ async function renderFolderModal(){
       up.onclick = () => { folderStack.pop(); renderFolderModal(); };
       listEl.appendChild(up);
     }
-    const folders = (data.folders || data.items || []).filter(f => !f.type || f.type === 'FOLDER');
+    if(!matched){
+      const warn = document.createElement('div');
+      warn.className = 'modal-item';
+      warn.style.color = '#dc2626';
+      warn.innerHTML = "Got a response but didn't recognize its shape. Raw data below (copy this back for a fix):";
+      listEl.appendChild(warn);
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'font-size:10px; padding:8px 16px; white-space:pre-wrap; word-break:break-all; color:var(--ink-soft); margin:0;';
+      pre.textContent = JSON.stringify(raw, null, 2).slice(0, 2000);
+      listEl.appendChild(pre);
+      return;
+    }
     if(!folders.length){
       const empty = document.createElement('div');
       empty.className = 'modal-item';
@@ -1035,6 +1081,8 @@ async function renderCsvModal(){
   listEl.innerHTML = '<div class="modal-item">Loading&hellip;</div>';
   try{
     const data = await listFolder(current.id);
+    const { folders, files: allFiles, matched, raw } = extractChildren(data);
+    const files = allFiles.filter(f => /\.(csv|txt)$/i.test(f.name || ''));
     listEl.innerHTML = '';
     if(csvFolderStack.length > 1){
       const up = document.createElement('div');
@@ -1043,9 +1091,18 @@ async function renderCsvModal(){
       up.onclick = () => { csvFolderStack.pop(); renderCsvModal(); };
       listEl.appendChild(up);
     }
-    const folders = (data.folders || []);
-    const files = (data.files || []).filter(f => /\.(csv|txt)$/i.test(f.name));
-
+    if(!matched){
+      const warn = document.createElement('div');
+      warn.className = 'modal-item';
+      warn.style.color = '#dc2626';
+      warn.innerHTML = "Got a response but didn't recognize its shape. Raw data below (copy this back for a fix):";
+      listEl.appendChild(warn);
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'font-size:10px; padding:8px 16px; white-space:pre-wrap; word-break:break-all; color:var(--ink-soft); margin:0;';
+      pre.textContent = JSON.stringify(raw, null, 2).slice(0, 2000);
+      listEl.appendChild(pre);
+      return;
+    }
     folders.forEach(f => {
       const item = document.createElement('div');
       item.className = 'modal-item';
@@ -1315,6 +1372,8 @@ document.getElementById('uploadBtn').addEventListener('click', async () => {
     lastUploadedIfcId = await uploadFileToFolder(targetFolder, 'Panorama.ifc', result.text, 'application/x-step');
     lastIfcPointRecords = result.records;
     document.getElementById('createBcfBtn').disabled = false;
+    const bcfBadge = document.getElementById('bcfLiveBadge');
+    if(bcfBadge){ bcfBadge.textContent = 'Connected'; bcfBadge.style.background = '#d1fae5'; bcfBadge.style.color = '#065f46'; }
     alert('Panorama.ifc uploaded to Trimble Connect Explorer.');
   } catch(err){
     alert(
