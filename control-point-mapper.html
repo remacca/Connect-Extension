@@ -1,0 +1,1546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Control Point Mapper</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
+<style>
+  :root{
+    --ink:#0f172a;
+    --ink-soft:#475569;
+    --line:#e2e8f0;
+    --panel:#ffffff;
+    --canvas:#f6f7f9;
+    --accent:#1d6ee0;
+    --accent-dark:#144d9e;
+    --good-bg:#eaf7ee;
+    --good-line:#bfe6cb;
+    --good-text:#1f7a3e;
+    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    font-family:var(--sans);
+    color:var(--ink);
+    background:var(--canvas);
+    display:flex;
+    height:100vh;
+    overflow:hidden;
+  }
+
+  /* ---------- Sidebar ---------- */
+  #sidebar{
+    width:340px;
+    min-width:340px;
+    background:var(--panel);
+    border-right:1px solid var(--line);
+    display:flex;
+    flex-direction:column;
+    overflow-y:auto;
+  }
+  .brand{
+    padding:18px 20px 14px;
+    border-bottom:1px solid var(--line);
+  }
+  .brand h1{
+    font-size:15px;
+    margin:0 0 2px;
+    letter-spacing:.2px;
+  }
+  .brand p{
+    margin:0;
+    font-size:12px;
+    color:var(--ink-soft);
+  }
+
+  .step{
+    border-bottom:1px solid var(--line);
+    padding:16px 20px;
+  }
+  .step-head{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:10px;
+  }
+  .step-num{
+    width:20px;height:20px;
+    border-radius:50%;
+    background:var(--accent);
+    color:#fff;
+    font-size:11px;
+    font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+    flex-shrink:0;
+  }
+  .step-title{
+    font-size:13px;
+    font-weight:600;
+  }
+
+  .status{
+    display:flex;
+    gap:8px;
+    align-items:flex-start;
+    background:var(--good-bg);
+    border:1px solid var(--good-line);
+    color:var(--good-text);
+    font-size:12px;
+    padding:9px 10px;
+    border-radius:8px;
+    margin-bottom:10px;
+    line-height:1.4;
+  }
+  .status .dot{
+    width:6px;height:6px;border-radius:50%;
+    background:var(--good-text);
+    margin-top:5px;flex-shrink:0;
+  }
+
+  .file-drop{
+    border:1.5px dashed var(--line);
+    border-radius:8px;
+    padding:14px 12px;
+    text-align:center;
+    font-size:12px;
+    color:var(--ink-soft);
+    cursor:pointer;
+    transition:.15s border-color, .15s background;
+  }
+  .file-drop:hover{border-color:var(--accent); background:#f4f8ff;}
+  .file-drop input{display:none;}
+  .file-drop strong{color:var(--accent);}
+
+  .stat-row{
+    display:flex;
+    justify-content:space-between;
+    font-size:12px;
+    color:var(--ink-soft);
+    margin-top:10px;
+  }
+  .stat-row b{color:var(--ink); font-weight:600;}
+
+  .tabs{
+    display:flex;
+    border:1px solid var(--line);
+    border-radius:8px;
+    overflow:hidden;
+    margin-bottom:12px;
+  }
+  .tab{
+    flex:1;
+    text-align:center;
+    padding:8px 6px;
+    font-size:12px;
+    font-weight:600;
+    cursor:pointer;
+    background:#fff;
+    color:var(--ink-soft);
+    border:none;
+    border-right:1px solid var(--line);
+  }
+  .tab:last-child{border-right:none;}
+  .tab.active{background:var(--accent); color:#fff;}
+
+  .field{margin-bottom:10px;}
+  .field label{
+    display:block;
+    font-size:11px;
+    font-weight:600;
+    color:var(--ink-soft);
+    margin-bottom:4px;
+    text-transform:uppercase;
+    letter-spacing:.4px;
+  }
+  .field input, .field select{
+    width:100%;
+    padding:8px 9px;
+    border:1px solid var(--line);
+    border-radius:7px;
+    font-size:13px;
+    font-family:var(--mono);
+    color:var(--ink);
+    background:#fff;
+  }
+  .field input:focus, .field select:focus{
+    outline:none;
+    border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(29,110,224,.12);
+  }
+  .field .hint{font-size:11px; color:var(--ink-soft); margin-top:4px; font-family:var(--sans);}
+
+  .btn{
+    width:100%;
+    padding:9px 12px;
+    border:none;
+    border-radius:7px;
+    background:var(--accent);
+    color:#fff;
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+    transition:.15s background;
+  }
+  .btn:hover{background:var(--accent-dark);}
+  .btn.secondary{
+    background:#fff;
+    color:var(--accent);
+    border:1px solid var(--accent);
+  }
+  .btn.secondary:hover{background:#f4f8ff;}
+  .btn-row{display:flex; gap:8px;}
+  .btn-row .btn{margin-top:0;}
+
+  .cp-pair{
+    border:1px solid var(--line);
+    border-radius:8px;
+    padding:10px;
+    margin-bottom:8px;
+  }
+  .cp-pair .cp-label{
+    font-size:11px;
+    font-weight:700;
+    color:var(--accent);
+    margin-bottom:6px;
+  }
+  .cp-grid{display:grid; grid-template-columns:1fr 1fr; gap:6px;}
+  .cp-grid input{padding:6px 7px; font-size:12px;}
+  .cp-sub{font-size:10px; color:var(--ink-soft); margin:6px 0 2px; text-transform:uppercase; letter-spacing:.3px;}
+
+  .hidden{display:none !important;}
+
+  .diam-row{
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  .diam-row input[type=range]{flex:1;}
+  .diam-value{
+    font-family:var(--mono);
+    font-size:12px;
+    font-weight:700;
+    width:46px;
+    text-align:right;
+  }
+
+  .footer-note{
+    padding:14px 20px 20px;
+    font-size:11px;
+    color:var(--ink-soft);
+    line-height:1.5;
+  }
+
+  .btn[disabled]{
+    background:#e2e8f0;
+    color:#94a3b8;
+    cursor:not-allowed;
+  }
+  .btn[disabled]:hover{background:#e2e8f0;}
+  .btn.secondary[disabled]{
+    background:#fff;
+    color:#94a3b8;
+    border-color:var(--line);
+  }
+  .live-badge{
+    display:inline-block;
+    font-size:9.5px;
+    font-weight:700;
+    letter-spacing:.4px;
+    text-transform:uppercase;
+    padding:2px 6px;
+    border-radius:4px;
+    background:#fef3c7;
+    color:#92400e;
+    margin-left:6px;
+    vertical-align:middle;
+  }
+  .spin{
+    display:inline-block;
+    width:11px;height:11px;
+    border:2px solid rgba(255,255,255,.5);
+    border-top-color:#fff;
+    border-radius:50%;
+    animation:spin .7s linear infinite;
+    margin-right:6px;
+    vertical-align:-1px;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  /* ---------- Map ---------- */
+  #map-wrap{
+    flex:1;
+    position:relative;
+  }
+  #map{
+    width:100%;
+    height:100%;
+    background:#0b1220;
+  }
+  .basemap-toggle{
+    position:absolute;
+    top:14px;
+    right:14px;
+    z-index:1000;
+    background:#fff;
+    border-radius:8px;
+    box-shadow:0 2px 10px rgba(15,23,42,.15);
+    display:flex;
+    overflow:hidden;
+    font-size:12px;
+  }
+  .basemap-toggle button{
+    border:none;
+    background:#fff;
+    padding:8px 12px;
+    font-weight:600;
+    cursor:pointer;
+    color:var(--ink-soft);
+  }
+  .basemap-toggle button.active{background:var(--accent); color:#fff;}
+
+  .top-banner{
+    position:absolute;
+    top:14px;
+    left:14px;
+    z-index:1000;
+    background:rgba(15,23,42,.82);
+    color:#fff;
+    padding:8px 14px;
+    border-radius:8px;
+    font-size:12px;
+    max-width:60%;
+  }
+  .top-banner b{font-weight:700;}
+
+  /* Leaflet popup styling */
+  .leaflet-popup-content-wrapper{border-radius:10px;}
+  .pop{font-family:var(--sans); font-size:12px; line-height:1.5;}
+  .pop h4{margin:0 0 4px; font-size:12.5px;}
+  .pop .row{display:flex; justify-content:space-between; gap:10px; color:var(--ink-soft);}
+  .pop .row b{color:var(--ink); font-family:var(--mono);}
+  .pop .img-path{
+    margin-top:6px;
+    padding-top:6px;
+    border-top:1px solid var(--line);
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--accent-dark);
+    word-break:break-all;
+  }
+
+  .cp-pick-btn{
+    font-size:11px;
+    padding:6px 8px;
+    border-radius:6px;
+    border:1px solid var(--accent);
+    color:var(--accent);
+    background:#fff;
+    cursor:pointer;
+    width:100%;
+    margin-top:6px;
+  }
+  .cp-pick-btn.active{background:var(--accent); color:#fff;}
+
+  ::-webkit-scrollbar{width:8px;}
+  ::-webkit-scrollbar-thumb{background:#cbd5e1; border-radius:4px;}
+
+  /* ---------- Folder picker modal ---------- */
+  .modal-overlay{
+    position:fixed; inset:0;
+    background:rgba(15,23,42,.45);
+    z-index:2000;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .modal-box{
+    background:#fff; border-radius:10px;
+    width:380px; max-height:70vh;
+    display:flex; flex-direction:column; overflow:hidden;
+    box-shadow:0 10px 40px rgba(0,0,0,.25);
+  }
+  .modal-header{
+    padding:14px 16px; border-bottom:1px solid var(--line);
+    font-size:13px; font-weight:700;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .modal-close{cursor:pointer; color:var(--ink-soft); font-size:18px; background:none; border:none; line-height:1;}
+  .modal-crumbs{padding:8px 16px; font-size:11px; color:var(--ink-soft); border-bottom:1px solid var(--line);}
+  .modal-list{overflow-y:auto; flex:1; min-height:120px;}
+  .modal-item{
+    padding:10px 16px; font-size:13px; cursor:pointer;
+    border-bottom:1px solid #f1f5f9;
+  }
+  .modal-item:hover{background:#f4f8ff;}
+  .modal-footer{padding:12px 16px; border-top:1px solid var(--line); display:flex; gap:8px;}
+  .modal-footer .btn{margin-top:0;}
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div class="brand">
+    <h1>Control Point Mapper</h1>
+    <p>Panoramic capture points &middot; prototype</p>
+    <div id="tcStatus" style="margin-top:8px; font-size:11px; color:var(--ink-soft);">
+      <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#94a3b8;margin-right:5px;"></span>
+      Standalone mode &mdash; not connected to Trimble Connect
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-head">
+      <div class="step-num">1</div>
+      <div class="step-title">Data source</div>
+    </div>
+    <label class="file-drop" id="dropZone">
+      <input type="file" id="csvInput" accept=".csv,.txt" />
+      <span><strong>Choose a CSV</strong></span>
+    </label>
+    <button class="btn secondary" id="browseCsvBtn" style="margin-top:8px;" disabled>Select CSV from Trimble Connect <span class="live-badge" id="csvLiveBadge">Live only</span></button>
+    <div class="stat-row"><span>Loaded points</span><b id="statCount">0</b></div>
+    <div class="stat-row"><span>Source</span><b id="statSource">none selected</b></div>
+
+    <div class="field" style="margin-top:14px;">
+      <label>Image folder in Trimble Connect<span class="live-badge" id="folderLiveBadge">Live only</span></label>
+      <input type="text" id="tcFolderPath" placeholder="Not connected to a Trimble Connect project" disabled>
+      <button class="btn secondary" id="browseFolderBtn" style="margin-top:6px;">Browse Trimble Connect folder&hellip;</button>
+      <div class="hint">Resolves each row's <code>imgname</code> (e.g. <code>pano/&hellip;.jpg</code>) against a real folder in your project via the Files API. Only available when this runs as a connected extension &mdash; see the note at the bottom.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-head">
+      <div class="step-num">2</div>
+      <div class="step-title">Coordinate system</div>
+    </div>
+
+    <div class="status">
+      <span class="dot"></span>
+      <span id="crsStatus">Using <b>EPSG:7855</b> &middot; GDA2020 / MGA Zone 55 by default for this dataset.</span>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="epsg">EPSG code</button>
+      <button class="tab" data-tab="cp">Control points</button>
+    </div>
+
+    <div id="tab-epsg">
+      <div class="field">
+        <label>EPSG code</label>
+        <select id="epsgSelect">
+          <option value="7849">7849 &mdash; GDA2020 / MGA Zone 49</option>
+          <option value="7850">7850 &mdash; GDA2020 / MGA Zone 50</option>
+          <option value="7851">7851 &mdash; GDA2020 / MGA Zone 51</option>
+          <option value="7852">7852 &mdash; GDA2020 / MGA Zone 52</option>
+          <option value="7853">7853 &mdash; GDA2020 / MGA Zone 53</option>
+          <option value="7854">7854 &mdash; GDA2020 / MGA Zone 54</option>
+          <option value="7855" selected>7855 &mdash; GDA2020 / MGA Zone 55</option>
+          <option value="7856">7856 &mdash; GDA2020 / MGA Zone 56</option>
+          <option value="28349">28349 &mdash; GDA94 / MGA Zone 49</option>
+          <option value="28350">28350 &mdash; GDA94 / MGA Zone 50</option>
+          <option value="28351">28351 &mdash; GDA94 / MGA Zone 51</option>
+          <option value="28352">28352 &mdash; GDA94 / MGA Zone 52</option>
+          <option value="28353">28353 &mdash; GDA94 / MGA Zone 53</option>
+          <option value="28354">28354 &mdash; GDA94 / MGA Zone 54</option>
+          <option value="28355">28355 &mdash; GDA94 / MGA Zone 55</option>
+          <option value="28356">28356 &mdash; GDA94 / MGA Zone 56</option>
+          <option value="32755">32755 &mdash; WGS84 / UTM Zone 55S</option>
+        </select>
+        <div class="hint">In a real extension this reads automatically from the Trimble Connect project's Coordinate Reference System. This prototype ships with the common Australian MGA zones since that's what your sample data uses.</div>
+      </div>
+      <button class="btn" id="applyEpsg">Apply projection</button>
+    </div>
+
+    <div id="tab-cp" class="hidden">
+      <div class="hint" style="margin-bottom:10px;">Pick two points whose real-world location you know (e.g. from satellite imagery), and match each to its row in the source data. Used when the site grid isn't a standard EPSG code.</div>
+
+      <div class="cp-pair">
+        <div class="cp-label">Control point A</div>
+        <div class="cp-sub">Local (from CSV)</div>
+        <div class="cp-grid">
+          <input type="text" id="cpA_x" placeholder="Easting">
+          <input type="text" id="cpA_y" placeholder="Northing">
+        </div>
+        <div class="cp-sub">Known location</div>
+        <div class="cp-grid">
+          <input type="text" id="cpA_lat" placeholder="Latitude">
+          <input type="text" id="cpA_lng" placeholder="Longitude">
+        </div>
+        <button class="cp-pick-btn" data-cp="A">Click map to set location</button>
+      </div>
+
+      <div class="cp-pair">
+        <div class="cp-label">Control point B</div>
+        <div class="cp-sub">Local (from CSV)</div>
+        <div class="cp-grid">
+          <input type="text" id="cpB_x" placeholder="Easting">
+          <input type="text" id="cpB_y" placeholder="Northing">
+        </div>
+        <div class="cp-sub">Known location</div>
+        <div class="cp-grid">
+          <input type="text" id="cpB_lat" placeholder="Latitude">
+          <input type="text" id="cpB_lng" placeholder="Longitude">
+        </div>
+        <button class="cp-pick-btn" data-cp="B">Click map to set location</button>
+      </div>
+
+      <button class="btn" id="applyCp">Apply control points</button>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-head">
+      <div class="step-num">3</div>
+      <div class="step-title">Point marker size</div>
+    </div>
+    <div class="field">
+      <label>Diameter for IFC export</label>
+      <div class="diam-row">
+        <input type="range" id="diamSlider" min="0.1" max="3" step="0.1" value="1.0">
+        <span class="diam-value"><span id="diamValue">1.0</span> m</span>
+      </div>
+      <div class="hint">Carried through to the IFC point-marker generation step. Default 1&nbsp;m.</div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-head">
+      <div class="step-num">4</div>
+      <div class="step-title">Generate &amp; publish</div>
+    </div>
+
+    <button class="btn" id="genIfcBtn">Generate Panorama.ifc</button>
+    <div class="btn-row" style="margin-top:8px;">
+      <button class="btn secondary" id="genBcfBtn">Generate BCF topics (.bcfzip)</button>
+    </div>
+    <div class="hint" style="margin:8px 0 12px;">Both build real files from the plotted points using the current projection and diameter, and download straight to your machine &mdash; no Trimble Connect connection needed for this step.</div>
+
+    <button class="btn secondary" id="uploadBtn" disabled>Upload to Trimble Connect Explorer <span class="live-badge" id="uploadLiveBadge">Live only</span></button>
+    <button class="btn secondary" id="open3dBtn" style="margin-top:8px;" disabled>Open in 3D Viewer <span class="live-badge" id="viewerLiveBadge">Live only</span></button>
+
+    <div class="field" style="margin-top:14px;">
+      <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-size:12px;">
+        <input type="checkbox" id="bcfTestMode" checked style="width:auto;">
+        Test mode &mdash; only create topics for the first 5 points
+      </label>
+    </div>
+    <button class="btn secondary" id="createBcfBtn" disabled>Create BCF topics in Trimble Connect <span class="live-badge" id="bcfLiveBadge">Live only</span></button>
+    <div class="hint" id="bcfProgressHint" style="margin-top:6px;">Creates one BCF topic per point, linked to the uploaded IFC's point objects. Requires uploading Panorama.ifc first.</div>
+
+    <div class="hint" style="margin-top:8px;">These need a live project connection (Files API upload + ViewerAPI + Topics API).</div>
+  </div>
+
+  <div class="footer-note">
+    Basemap imagery: Esri World Imagery. Click any point on the map to preview its capture location, timestamp and referenced image path.
+  </div>
+</div>
+
+<div id="map-wrap">
+  <div class="top-banner"><b id="bannerCount">0</b> capture points plotted &middot; <span id="bannerCrs">EPSG:7855</span></div>
+  <div class="basemap-toggle">
+    <button class="active" data-base="sat">Satellite</button>
+    <button data-base="street">Street</button>
+  </div>
+  <div id="map"></div>
+</div>
+
+<div id="folderModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>Select image folder</span>
+      <button class="modal-close" id="folderModalClose">&times;</button>
+    </div>
+    <div class="modal-crumbs" id="folderCrumbs">Root</div>
+    <div class="modal-list" id="folderList"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" id="folderModalCancel">Cancel</button>
+      <button class="btn" id="folderModalSelect">Use this folder</button>
+    </div>
+  </div>
+</div>
+
+<div id="csvModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>Select CSV file</span>
+      <button class="modal-close" id="csvModalClose">&times;</button>
+    </div>
+    <div class="modal-crumbs" id="csvCrumbs">Root</div>
+    <div class="modal-list" id="csvList"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" id="csvModalCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===================== Minimal EPSG:GDA / UTM projector (no proj4 dependency) ===================== */
+/* Implements a transverse Mercator forward/inverse projection sufficient for
+   GDA2020 / GDA94 MGA zones and WGS84 UTM zones used in the EPSG dropdown. */
+function utmToLatLon(easting, northing, zone, southHemi, isGRS80){
+  const a = isGRS80 ? 6378137.0 : 6378137.0; // GRS80 and WGS84 semi-major axes are equal to sub-mm precision
+  const f = isGRS80 ? 1/298.257222101 : 1/298.257223563;
+  const k0 = 0.9996;
+  const e2 = f*(2-f);
+  const ePrime2 = e2/(1-e2);
+  const e1 = (1-Math.sqrt(1-e2))/(1+Math.sqrt(1-e2));
+
+  let x = easting - 500000.0;
+  let y = northing;
+  if(southHemi) y -= 10000000.0;
+
+  const M = y / k0;
+  const mu = M / (a*(1 - e2/4 - 3*e2*e2/64 - 5*e2*e2*e2/256));
+
+  const phi1 = mu + (3*e1/2 - 27*e1*e1*e1/32)*Math.sin(2*mu)
+                  + (21*e1*e1/16 - 55*e1*e1*e1*e1/32)*Math.sin(4*mu)
+                  + (151*e1*e1*e1/96)*Math.sin(6*mu);
+
+  const N1 = a/Math.sqrt(1-e2*Math.sin(phi1)*Math.sin(phi1));
+  const T1 = Math.tan(phi1)*Math.tan(phi1);
+  const C1 = ePrime2*Math.cos(phi1)*Math.cos(phi1);
+  const R1 = a*(1-e2)/Math.pow(1-e2*Math.sin(phi1)*Math.sin(phi1),1.5);
+  const D = x/(N1*k0);
+
+  const lat = phi1 - (N1*Math.tan(phi1)/R1)*(
+      D*D/2
+      - (5+3*T1+10*C1-4*C1*C1-9*ePrime2)*D*D*D*D/24
+      + (61+90*T1+298*C1+45*T1*T1-252*ePrime2-3*C1*C1)*D*D*D*D*D*D/720
+    );
+
+  let lon = (D - (1+2*T1+C1)*D*D*D/6
+      + (5-2*C1+28*T1-3*C1*C1+8*ePrime2+24*T1*T1)*D*D*D*D*D/120) / Math.cos(phi1);
+
+  const lonOrigin = (zone*6 - 183) * Math.PI/180;
+  lon = lonOrigin + lon;
+
+  return [lat*180/Math.PI, lon*180/Math.PI];
+}
+
+const EPSG_DEFS = {
+  7849:{zone:49, south:true, grs80:true}, 7850:{zone:50, south:true, grs80:true},
+  7851:{zone:51, south:true, grs80:true}, 7852:{zone:52, south:true, grs80:true},
+  7853:{zone:53, south:true, grs80:true}, 7854:{zone:54, south:true, grs80:true},
+  7855:{zone:55, south:true, grs80:true}, 7856:{zone:56, south:true, grs80:true},
+  28349:{zone:49, south:true, grs80:true}, 28350:{zone:50, south:true, grs80:true},
+  28351:{zone:51, south:true, grs80:true}, 28352:{zone:52, south:true, grs80:true},
+  28353:{zone:53, south:true, grs80:true}, 28354:{zone:54, south:true, grs80:true},
+  28355:{zone:55, south:true, grs80:true}, 28356:{zone:56, south:true, grs80:true},
+  32755:{zone:55, south:true, grs80:false}
+};
+
+let currentMode = 'epsg';
+let currentEpsg = 7855;
+let cpTransform = null; // {a:{re,im}, b:{re,im}} complex similarity transform
+
+function projectPoint(x, y){
+  if(currentMode === 'epsg'){
+    const def = EPSG_DEFS[currentEpsg];
+    const [lat, lon] = utmToLatLon(x, y, def.zone, def.south, def.grs80);
+    return [lat, lon];
+  } else if(currentMode === 'cp' && cpTransform){
+    // complex similarity transform: w = a*z + b, in Web Mercator meters
+    const zr = x, zi = y;
+    const ar = cpTransform.a.re, ai = cpTransform.a.im;
+    const wr = ar*zr - ai*zi + cpTransform.b.re;
+    const wi = ai*zr + ar*zi + cpTransform.b.im;
+    const pt = L.CRS.EPSG3857.unproject(L.point(wr, wi));
+    return [pt.lat, pt.lng];
+  }
+  return [0,0];
+}
+
+/* ===================== Map setup ===================== */
+const map = L.map('map', {zoomControl:true}).setView([20, 0], 2);
+
+const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom:20, attribution:'Esri, Maxar, Earthstar Geographics'
+}).addTo(map);
+
+const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom:19, attribution:'&copy; OpenStreetMap contributors'
+});
+
+document.querySelectorAll('.basemap-toggle button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.basemap-toggle button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    if(btn.dataset.base === 'sat'){ map.removeLayer(streetLayer); satLayer.addTo(map); }
+    else { map.removeLayer(satLayer); streetLayer.addTo(map); }
+  });
+});
+
+let markerLayer = L.layerGroup().addTo(map);
+let currentPoints = []; // {ts, img, x, y, z}
+
+function parseCsv(text){
+  const lines = text.split(/\r?\n/);
+  const pts = [];
+  for(const line of lines){
+    const t = line.trim();
+    if(!t || t.startsWith('#')) continue;
+    const parts = t.split(/\s+/);
+    if(parts.length < 5) continue;
+    const [ts, img, x, y, z] = parts;
+    const xf = parseFloat(x), yf = parseFloat(y), zf = parseFloat(z);
+    if(Number.isNaN(xf) || Number.isNaN(yf)) continue;
+    pts.push({ts, img, x:xf, y:yf, z:zf});
+  }
+  return pts;
+}
+
+function renderPoints(){
+  markerLayer.clearLayers();
+  const bounds = [];
+  currentPoints.forEach(p=>{
+    const [lat, lon] = projectPoint(p.x, p.y);
+    if(!isFinite(lat) || !isFinite(lon)) return;
+    const marker = L.circleMarker([lat, lon], {
+      radius:4, weight:1.5, color:'#1d6ee0', fillColor:'#1d6ee0', fillOpacity:0.85
+    });
+    marker.bindPopup(`
+      <div class="pop">
+        <h4>Capture point</h4>
+        <div class="row"><span>Timestamp</span><b>${p.ts}</b></div>
+        <div class="row"><span>Easting</span><b>${p.x.toFixed(3)}</b></div>
+        <div class="row"><span>Northing</span><b>${p.y.toFixed(3)}</b></div>
+        <div class="row"><span>Elevation</span><b>${p.z.toFixed(3)}</b></div>
+        <div class="img-path">${p.img}</div>
+      </div>
+    `);
+    marker.addTo(markerLayer);
+    bounds.push([lat, lon]);
+  });
+  document.getElementById('statCount').textContent = currentPoints.length.toLocaleString();
+  document.getElementById('bannerCount').textContent = currentPoints.length.toLocaleString();
+  if(bounds.length){
+    map.fitBounds(bounds, {padding:[40,40]});
+  }
+}
+
+/* ===================== Sidebar interactions ===================== */
+document.querySelectorAll('.tab').forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-epsg').classList.toggle('hidden', tab.dataset.tab !== 'epsg');
+    document.getElementById('tab-cp').classList.toggle('hidden', tab.dataset.tab !== 'cp');
+  });
+});
+
+document.getElementById('applyEpsg').addEventListener('click', ()=>{
+  currentEpsg = parseInt(document.getElementById('epsgSelect').value, 10);
+  currentMode = 'epsg';
+  const label = document.getElementById('epsgSelect').selectedOptions[0].textContent;
+  document.getElementById('crsStatus').innerHTML = `Using <b>EPSG:${currentEpsg}</b> &middot; ${label.split('&mdash;')[1] ? label.split('\u2014')[1].trim() : ''}`;
+  document.getElementById('bannerCrs').textContent = `EPSG:${currentEpsg}`;
+  renderPoints();
+});
+
+let pickingCp = null;
+document.querySelectorAll('.cp-pick-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.cp-pick-btn').forEach(b=>b.classList.remove('active'));
+    if(pickingCp === btn.dataset.cp){ pickingCp = null; return; }
+    pickingCp = btn.dataset.cp;
+    btn.classList.add('active');
+  });
+});
+map.on('click', (e)=>{
+  if(!pickingCp) return;
+  document.getElementById(`cp${pickingCp}_lat`).value = e.latlng.lat.toFixed(6);
+  document.getElementById(`cp${pickingCp}_lng`).value = e.latlng.lng.toFixed(6);
+  document.querySelectorAll('.cp-pick-btn').forEach(b=>b.classList.remove('active'));
+  pickingCp = null;
+});
+
+document.getElementById('applyCp').addEventListener('click', ()=>{
+  const ax = parseFloat(document.getElementById('cpA_x').value);
+  const ay = parseFloat(document.getElementById('cpA_y').value);
+  const alat = parseFloat(document.getElementById('cpA_lat').value);
+  const alng = parseFloat(document.getElementById('cpA_lng').value);
+  const bx = parseFloat(document.getElementById('cpB_x').value);
+  const by = parseFloat(document.getElementById('cpB_y').value);
+  const blat = parseFloat(document.getElementById('cpB_lat').value);
+  const blng = parseFloat(document.getElementById('cpB_lng').value);
+  if([ax,ay,alat,alng,bx,by,blat,blng].some(v=>Number.isNaN(v))){
+    alert('Fill in both control points (local X/Y and known lat/lng) before applying.');
+    return;
+  }
+  const wA = L.CRS.EPSG3857.project(L.latLng(alat, alng));
+  const wB = L.CRS.EPSG3857.project(L.latLng(blat, blng));
+
+  // complex similarity transform: solve a,b from w = a*z + b
+  const z1 = {re:ax, im:ay}, z2 = {re:bx, im:by};
+  const w1 = {re:wA.x, im:wA.y}, w2 = {re:wB.x, im:wB.y};
+  const dz = {re:z2.re-z1.re, im:z2.im-z1.im};
+  const dw = {re:w2.re-w1.re, im:w2.im-w1.im};
+  const denom = dz.re*dz.re + dz.im*dz.im;
+  const a = { re:(dw.re*dz.re + dw.im*dz.im)/denom, im:(dw.im*dz.re - dw.re*dz.im)/denom };
+  const b = { re: w1.re - (a.re*z1.re - a.im*z1.im), im: w1.im - (a.im*z1.re + a.re*z1.im) };
+  cpTransform = {a, b};
+  currentMode = 'cp';
+  document.getElementById('crsStatus').innerHTML = `Using <b>2-point calibration</b> &middot; site grid mapped from control points`;
+  document.getElementById('bannerCrs').textContent = 'Control points';
+  renderPoints();
+});
+
+document.getElementById('diamSlider').addEventListener('input', (e)=>{
+  document.getElementById('diamValue').textContent = parseFloat(e.target.value).toFixed(1);
+});
+
+document.getElementById('csvInput').addEventListener('change', (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev)=>{
+    currentPoints = parseCsv(ev.target.result);
+    document.getElementById('statSource').textContent = file.name;
+    renderPoints();
+  };
+  reader.readAsText(file);
+});
+
+/* ===================== Trimble Connect Workspace API connection ===================== */
+let TC_API = null;
+let TC_TOKEN = null;
+let TC_PROJECT_ID = null;
+let selectedFolderId = null;
+let lastUploadedIfcId = null;
+
+// Trimble Connect's Core API is region-specific (each project lives in exactly one region).
+// Rather than hardcoding a region, we discover the correct one at runtime — see resolveRegionBase() below.
+let TC_REGION_BASE = null;
+const REGION_DISCOVERY_URL = "https://app.connect.trimble.com/tc/api/2.0/regions";
+
+function setTcStatus(text, color){
+  const el = document.getElementById('tcStatus');
+  el.innerHTML = `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${color};margin-right:5px;"></span>${text}`;
+}
+
+async function resolveRegionBase(projectId, token){
+  const res = await fetch(REGION_DISCOVERY_URL);
+  if(!res.ok) throw new Error(`Could not fetch region list (${res.status})`);
+  const regions = await res.json();
+
+  for(const region of regions){
+    const base = region['tc-api'].replace(/\/$/, ''); // strip trailing slash
+    try{
+      const testRes = await fetch(`${base}/projects/${projectId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if(testRes.ok) return base;
+    } catch(e){
+      // this region didn't have the project (or errored) — try the next one
+    }
+  }
+  throw new Error('Project not found in any known Trimble Connect region.');
+}
+
+function handleWorkspaceEvent(event, args){
+  if(event === 'extension.accessToken'){
+    TC_TOKEN = (args && args.data && typeof args.data === 'object') ? args.data.accessToken : args.data;
+  } else if(event === 'extension.sessionInvalid'){
+    TC_TOKEN = null;
+    setTcStatus('Session expired &mdash; reopen the extension', '#dc2626');
+  } else if(event === 'extension.command'){
+    // Fired when the user clicks the "Panoramas" nav item while already open — nothing extra to do.
+  }
+}
+
+// Hosted alongside control-point-mapper.html in the same repo/Pages site.
+const PANORAMA_ICON_URL = 'https://remacca.github.io/Connect-Extension/panorama-icon.svg';
+
+async function initExtension(){
+  try{
+    TC_API = await TrimbleConnectWorkspace.connect(window.parent, handleWorkspaceEvent, 15000);
+
+    // Register this extension's entry in Trimble Connect's left navigation.
+    TC_API.ui.setMenu({
+      title: 'Panoramas',
+      icon: PANORAMA_ICON_URL,
+      command: 'PANORAMAS_OPEN'
+    });
+
+    const permResult = await TC_API.extension.requestPermission('accesstoken');
+    if(typeof permResult === 'string' && permResult !== 'pending' && permResult !== 'denied'){
+      TC_TOKEN = permResult;
+    }
+    const project = await TC_API.project.getCurrentProject();
+    TC_PROJECT_ID = project.id;
+
+    setTcStatus(`Connected &middot; ${project.name || 'project ' + project.id} &middot; finding region&hellip;`, '#1f7a3e');
+
+    try{
+      TC_REGION_BASE = await resolveRegionBase(TC_PROJECT_ID, TC_TOKEN);
+      setTcStatus(`Connected &middot; ${project.name || 'project ' + project.id}`, '#1f7a3e');
+      document.getElementById('uploadBtn').disabled = false;
+      document.getElementById('open3dBtn').disabled = false;
+      document.getElementById('browseCsvBtn').disabled = false;
+      ['folderLiveBadge','csvLiveBadge','uploadLiveBadge','viewerLiveBadge'].forEach(id=>{
+        const b = document.getElementById(id);
+        if(b){ b.textContent = 'Connected'; b.style.background = '#d1fae5'; b.style.color = '#065f46'; }
+      });
+    } catch(regionErr){
+      setTcStatus(`Connected, but couldn't resolve API region: ${regionErr.message}`, '#dc2626');
+    }
+  } catch(err){
+    // Not running inside Trimble Connect (e.g. opened directly as a standalone file) — stay in standalone mode.
+    console.log('Standalone mode (no Trimble Connect connection):', err && err.message);
+  }
+}
+
+/* ===================== Core Files API helpers ===================== */
+async function tcApiGet(path){
+  const res = await fetch(TC_REGION_BASE + path, {
+    headers: { Authorization: `Bearer ${TC_TOKEN}` }
+  });
+  if(!res.ok) throw new Error(`Trimble Connect API error ${res.status}`);
+  return res.json();
+}
+
+async function getRootFolderId(){
+  const data = await tcApiGet(`/projects/${TC_PROJECT_ID}`);
+  return data.rootId;
+}
+
+async function listFolder(folderId){
+  return tcApiGet(`/folders/${folderId}/items`);
+}
+
+// The exact shape of a folder-listing response isn't confirmed against Trimble's docs
+// (their API reference blocks automated access), so this tries several plausible shapes
+// and, if none match, surfaces the raw response instead of silently showing nothing —
+// that raw output is what should get pasted back so this can be corrected precisely.
+function extractChildren(data){
+  let items = null;
+  if(Array.isArray(data)) items = data;
+  else if(Array.isArray(data.items)) items = data.items;
+  else if(Array.isArray(data.data)) items = data.data;
+  else if(Array.isArray(data.children)) items = data.children;
+
+  if(items){
+    const isFolder = (i) => {
+      const t = (i.type || i.kind || i.itemType || i.entityType || '').toString().toUpperCase();
+      return t.includes('FOLDER');
+    };
+    const isFile = (i) => {
+      const t = (i.type || i.kind || i.itemType || i.entityType || '').toString().toUpperCase();
+      if(t.includes('FILE')) return true;
+      if(!t && i.name) return /\.[a-z0-9]+$/i.test(i.name); // fallback: has a file extension
+      return false;
+    };
+    return { folders: items.filter(isFolder), files: items.filter(isFile), matched: true, raw: data };
+  }
+  if(Array.isArray(data.folders) || Array.isArray(data.files)){
+    return { folders: data.folders || [], files: data.files || [], matched: true, raw: data };
+  }
+  return { folders: [], files: [], matched: false, raw: data };
+}
+
+async function uploadFileToFolder(folderId, filename, content, mime){
+  const createRes = await fetch(`${TC_REGION_BASE}/folders/${folderId}/files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: filename })
+  });
+  if(!createRes.ok) throw new Error(`Could not create file record (${createRes.status})`);
+  const created = await createRes.json();
+  const uploadUrl = created.uploadUrl;
+  const fileId = created.fileId || created.id;
+
+  const putRes = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': mime },
+    body: new Blob([content], { type: mime })
+  });
+  if(!putRes.ok) throw new Error(`File upload failed (${putRes.status})`);
+  return fileId;
+}
+
+/* ===================== Folder picker modal ===================== */
+let folderStack = [];
+
+async function openFolderModal(){
+  document.getElementById('folderModal').classList.remove('hidden');
+  try{
+    const rootId = await getRootFolderId();
+    folderStack = [{ id: rootId, name: 'Root' }];
+    await renderFolderModal();
+  } catch(err){
+    document.getElementById('folderList').innerHTML = `<div class="modal-item">Couldn't reach Trimble Connect: ${err.message}</div>`;
+  }
+}
+
+async function renderFolderModal(){
+  const current = folderStack[folderStack.length - 1];
+  document.getElementById('folderCrumbs').textContent = folderStack.map(f => f.name).join(' / ');
+  const listEl = document.getElementById('folderList');
+  listEl.innerHTML = '<div class="modal-item">Loading&hellip;</div>';
+  try{
+    const data = await listFolder(current.id);
+    const { folders, matched, raw } = extractChildren(data);
+    listEl.innerHTML = '';
+    if(folderStack.length > 1){
+      const up = document.createElement('div');
+      up.className = 'modal-item';
+      up.textContent = '.. (up one level)';
+      up.onclick = () => { folderStack.pop(); renderFolderModal(); };
+      listEl.appendChild(up);
+    }
+    if(!matched){
+      const warn = document.createElement('div');
+      warn.className = 'modal-item';
+      warn.style.color = '#dc2626';
+      warn.innerHTML = "Got a response but didn't recognize its shape. Raw data below (copy this back for a fix):";
+      listEl.appendChild(warn);
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'font-size:10px; padding:8px 16px; white-space:pre-wrap; word-break:break-all; color:var(--ink-soft); margin:0;';
+      pre.textContent = JSON.stringify(raw, null, 2).slice(0, 2000);
+      listEl.appendChild(pre);
+      return;
+    }
+    if(!folders.length){
+      const empty = document.createElement('div');
+      empty.className = 'modal-item';
+      empty.style.color = 'var(--ink-soft)';
+      empty.textContent = 'No subfolders here.';
+      listEl.appendChild(empty);
+    }
+    folders.forEach(f => {
+      const item = document.createElement('div');
+      item.className = 'modal-item';
+      item.textContent = '\uD83D\uDCC1 ' + f.name;
+      item.onclick = () => { folderStack.push({ id: f.id, name: f.name }); renderFolderModal(); };
+      listEl.appendChild(item);
+    });
+  } catch(err){
+    listEl.innerHTML = `<div class="modal-item">Couldn't load folder contents: ${err.message}</div>`;
+  }
+}
+
+document.getElementById('folderModalSelect').addEventListener('click', () => {
+  const current = folderStack[folderStack.length - 1];
+  selectedFolderId = current.id;
+  document.getElementById('tcFolderPath').value = folderStack.map(f => f.name).join(' / ');
+  document.getElementById('folderModal').classList.add('hidden');
+});
+document.getElementById('folderModalCancel').addEventListener('click', () => {
+  document.getElementById('folderModal').classList.add('hidden');
+});
+document.getElementById('folderModalClose').addEventListener('click', () => {
+  document.getElementById('folderModal').classList.add('hidden');
+});
+
+/* ===================== Download a file's content (best-effort — see note) ===================== */
+// NOTE: unlike the region-discovery endpoint, this download path isn't confirmed against Trimble's
+// docs (their API reference blocks automated access). It now tries several real fields seen in
+// actual file metadata (including thumbnailUrl, which — despite the name — is a working, token-based
+// content URL and the best lead so far), plus a separate versions lookup. If everything fails, it
+// surfaces exactly what was tried and the raw metadata, rather than a flat error.
+async function downloadFileContent(fileId){
+  let meta;
+  try{
+    const metaRes = await fetch(`${TC_REGION_BASE}/files/${fileId}`, {
+      headers: { Authorization: `Bearer ${TC_TOKEN}` }
+    });
+    if(!metaRes.ok) throw new Error(`metadata request failed (${metaRes.status})`);
+    meta = await metaRes.json();
+  } catch(err){
+    throw new Error(`Could not fetch file metadata: ${err.message}`);
+  }
+
+  const attempts = [];
+
+  async function tryUrl(label, url, opts){
+    if(!url) return null;
+    try{
+      const res = await fetch(url, opts || {});
+      if(!res.ok){ attempts.push(`${label}: returned ${res.status}`); return null; }
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      if(contentType && !contentType.includes('text') && !contentType.includes('csv') &&
+         !contentType.includes('octet-stream') && !contentType.includes('plain')){
+        attempts.push(`${label}: succeeded but content-type was "${contentType}" (not text — likely not the real file content)`);
+        return null;
+      }
+      const text = await res.text();
+      // sanity check: real CSV/txt content shouldn't start with binary/image magic bytes
+      if(text.slice(0, 8).includes('\uFFFD') || /^\x89PNG|^GIF8|^\xFF\xD8/.test(text)){
+        attempts.push(`${label}: succeeded but looks like binary/image data, not text`);
+        return null;
+      }
+      return text;
+    } catch(err){
+      attempts.push(`${label}: ${err.message}`);
+      return null;
+    }
+  }
+
+  // 1) Direct fields sometimes present on file metadata
+  const direct = meta.downloadUrl || meta.url || meta.contentUrl;
+  let result = await tryUrl('metadata field (downloadUrl/url/contentUrl)', direct);
+  if(result) return result;
+  if(!direct) attempts.push('metadata field (downloadUrl/url/contentUrl): none present');
+
+  // 2) thumbnailUrl — misleadingly named, but a real working content URL in observed responses
+  result = await tryUrl('thumbnailUrl', meta.thumbnailUrl);
+  if(result) return result;
+
+  // 3) A separate versions lookup, in case the real content link lives there
+  try{
+    const versionsRes = await fetch(`${TC_REGION_BASE}/files/${fileId}/versions`, {
+      headers: { Authorization: `Bearer ${TC_TOKEN}` }
+    });
+    if(versionsRes.ok){
+      const versions = await versionsRes.json();
+      const list = Array.isArray(versions) ? versions : (versions.items || versions.versions || []);
+      const latest = list[0];
+      const versionUrl = latest && (latest.downloadUrl || latest.url || latest.contentUrl || latest.thumbnailUrl);
+      result = await tryUrl('versions endpoint', versionUrl);
+      if(result) return result;
+      if(!versionUrl) attempts.push(`versions endpoint: reached but no usable URL field (keys: ${latest ? Object.keys(latest).join(', ') : 'none'})`);
+    } else {
+      attempts.push(`versions endpoint: returned ${versionsRes.status}`);
+    }
+  } catch(err){
+    attempts.push(`versions endpoint: ${err.message}`);
+  }
+
+  const metaDump = JSON.stringify(meta, null, 2).slice(0, 1200);
+  throw new Error(
+    `All download attempts failed:\n` + attempts.map(a => '\u2022 ' + a).join('\n') +
+    `\n\nFile metadata (copy this back for a fix):\n${metaDump}`
+  );
+}
+
+/* ===================== CSV file picker modal ===================== */
+let csvFolderStack = [];
+
+async function openCsvModal(){
+  document.getElementById('csvModal').classList.remove('hidden');
+  try{
+    const rootId = await getRootFolderId();
+    csvFolderStack = [{ id: rootId, name: 'Root' }];
+    await renderCsvModal();
+  } catch(err){
+    document.getElementById('csvList').innerHTML = `<div class="modal-item">Couldn't reach Trimble Connect: ${err.message}</div>`;
+  }
+}
+
+async function renderCsvModal(){
+  const current = csvFolderStack[csvFolderStack.length - 1];
+  document.getElementById('csvCrumbs').textContent = csvFolderStack.map(f => f.name).join(' / ');
+  const listEl = document.getElementById('csvList');
+  listEl.innerHTML = '<div class="modal-item">Loading&hellip;</div>';
+  try{
+    const data = await listFolder(current.id);
+    const { folders, files: allFiles, matched, raw } = extractChildren(data);
+    const files = allFiles.filter(f => /\.(csv|txt)$/i.test(f.name || ''));
+    listEl.innerHTML = '';
+    if(csvFolderStack.length > 1){
+      const up = document.createElement('div');
+      up.className = 'modal-item';
+      up.textContent = '.. (up one level)';
+      up.onclick = () => { csvFolderStack.pop(); renderCsvModal(); };
+      listEl.appendChild(up);
+    }
+    if(!matched){
+      const warn = document.createElement('div');
+      warn.className = 'modal-item';
+      warn.style.color = '#dc2626';
+      warn.innerHTML = "Got a response but didn't recognize its shape. Raw data below (copy this back for a fix):";
+      listEl.appendChild(warn);
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'font-size:10px; padding:8px 16px; white-space:pre-wrap; word-break:break-all; color:var(--ink-soft); margin:0;';
+      pre.textContent = JSON.stringify(raw, null, 2).slice(0, 2000);
+      listEl.appendChild(pre);
+      return;
+    }
+    folders.forEach(f => {
+      const item = document.createElement('div');
+      item.className = 'modal-item';
+      item.textContent = '\uD83D\uDCC1 ' + f.name;
+      item.onclick = () => { csvFolderStack.push({ id: f.id, name: f.name }); renderCsvModal(); };
+      listEl.appendChild(item);
+    });
+    files.forEach(f => {
+      const item = document.createElement('div');
+      item.className = 'modal-item';
+      item.style.fontWeight = '600';
+      item.style.color = 'var(--accent-dark)';
+      item.textContent = '\uD83D\uDCC4 ' + f.name;
+      item.onclick = () => selectCsvFile(f);
+      listEl.appendChild(item);
+    });
+    if(!folders.length && !files.length){
+      const empty = document.createElement('div');
+      empty.className = 'modal-item';
+      empty.style.color = 'var(--ink-soft)';
+      empty.textContent = 'Nothing here (no subfolders or .csv/.txt files).';
+      listEl.appendChild(empty);
+    }
+  } catch(err){
+    listEl.innerHTML = `<div class="modal-item">Couldn't load folder contents: ${err.message}</div>`;
+  }
+}
+
+async function selectCsvFile(file){
+  const listEl = document.getElementById('csvList');
+  listEl.innerHTML = `<div class="modal-item">Downloading ${file.name}&hellip;</div>`;
+  try{
+    const text = await downloadFileContent(file.id);
+    currentPoints = parseCsv(text);
+    document.getElementById('statSource').textContent = file.name;
+    renderPoints();
+    document.getElementById('csvModal').classList.add('hidden');
+  } catch(err){
+    listEl.innerHTML = '';
+    const warn = document.createElement('div');
+    warn.className = 'modal-item';
+    warn.style.color = '#dc2626';
+    warn.textContent = `Couldn't download ${file.name}:`;
+    listEl.appendChild(warn);
+    const pre = document.createElement('pre');
+    pre.style.cssText = 'font-size:10px; padding:8px 16px; white-space:pre-wrap; word-break:break-all; color:var(--ink-soft); margin:0;';
+    pre.textContent = err.message;
+    listEl.appendChild(pre);
+  }
+}
+
+document.getElementById('csvModalCancel').addEventListener('click', () => {
+  document.getElementById('csvModal').classList.add('hidden');
+});
+document.getElementById('csvModalClose').addEventListener('click', () => {
+  document.getElementById('csvModal').classList.add('hidden');
+});
+
+document.getElementById('browseCsvBtn').addEventListener('click', () => {
+  if(TC_TOKEN && TC_PROJECT_ID && TC_REGION_BASE){
+    openCsvModal();
+  } else {
+    alert('Not connected to Trimble Connect right now.');
+  }
+});
+
+document.getElementById('browseFolderBtn').addEventListener('click', () => {
+  if(TC_TOKEN && TC_PROJECT_ID && TC_REGION_BASE){
+    openFolderModal();
+  } else {
+    alert(
+      "Not connected to Trimble Connect right now.\n\n" +
+      "This works once the extension is opened inside a real Trimble Connect project " +
+      "(it needs to load inside the iframe and receive an access token)."
+    );
+  }
+});
+
+/* ===================== IFC generation (real, runs client-side) ===================== */
+function ifcGuid(){
+  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$';
+  let s = '';
+  for(let i=0;i<22;i++) s += chars[Math.floor(Math.random()*chars.length)];
+  return s;
+}
+function stepStr(s){ return "'" + String(s).replace(/'/g,"''") + "'"; }
+
+function generateIFC(points, diameter){
+  if(!points.length) return null;
+  let id = 0;
+  const lines = [];
+  const records = []; // {ts, img, x, y, z (local, matching this IFC's placement), guid}
+  const E = (def)=>{ id++; lines.push('#'+id+'='+def+';'); return id; };
+
+  const baseX = points[0].x, baseY = points[0].y;
+
+  const orgId    = E("IFCORGANIZATION($,'Control Point Mapper','Generated extension output',$,$)");
+  const appId    = E(`IFCAPPLICATION(#${orgId},'1.0','Control Point Mapper','CPM')`);
+  const personId = E("IFCPERSON($,$,$,$,$,$,$,$)");
+  const pAndOId  = E(`IFCPERSONANDORGANIZATION(#${personId},#${orgId},$)`);
+  const ownerId  = E(`IFCOWNERHISTORY(#${pAndOId},#${appId},$,.ADDED.,$,$,$,0)`);
+
+  const originId = E("IFCCARTESIANPOINT((0.,0.,0.))");
+  const zDirId   = E("IFCDIRECTION((0.,0.,1.))");
+  const xDirId   = E("IFCDIRECTION((1.,0.,0.))");
+  const axisId   = E(`IFCAXIS2PLACEMENT3D(#${originId},#${zDirId},#${xDirId})`);
+
+  const contextId = E(`IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-5,#${axisId},$)`);
+
+  const uLenId   = E("IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.)");
+  const uAngId   = E("IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.)");
+  const uSldId   = E("IFCSIUNIT(*,.SOLIDANGLEUNIT.,$,.STERADIAN.)");
+  const unitsId  = E(`IFCUNITASSIGNMENT((#${uLenId},#${uAngId},#${uSldId}))`);
+
+  const projectId = E(`IFCPROJECT(${stepStr(ifcGuid())},#${ownerId},'Panorama Capture Points',$,$,$,$,(#${contextId}),#${unitsId})`);
+
+  const sitePlacementId = E(`IFCLOCALPLACEMENT($,#${axisId})`);
+  const siteId = E(`IFCSITE(${stepStr(ifcGuid())},#${ownerId},'Site (local origin at first point: E${baseX.toFixed(3)} N${baseY.toFixed(3)})',$,$,#${sitePlacementId},$,$,.ELEMENT.,$,$,$,$,$)`);
+
+  const buildingPlacementId = E(`IFCLOCALPLACEMENT(#${sitePlacementId},#${axisId})`);
+  const buildingId = E(`IFCBUILDING(${stepStr(ifcGuid())},#${ownerId},'Building',$,$,#${buildingPlacementId},$,$,.ELEMENT.,$,$,$)`);
+
+  const storeyPlacementId = E(`IFCLOCALPLACEMENT(#${buildingPlacementId},#${axisId})`);
+  const storeyId = E(`IFCBUILDINGSTOREY(${stepStr(ifcGuid())},#${ownerId},'Panorama Points',$,$,#${storeyPlacementId},$,$,.ELEMENT.,0.)`);
+
+  E(`IFCRELAGGREGATES(${stepStr(ifcGuid())},#${ownerId},$,$,#${projectId},(#${siteId}))`);
+  E(`IFCRELAGGREGATES(${stepStr(ifcGuid())},#${ownerId},$,$,#${siteId},(#${buildingId}))`);
+  E(`IFCRELAGGREGATES(${stepStr(ifcGuid())},#${ownerId},$,$,#${buildingId},(#${storeyId}))`);
+
+  const circleCenterId = E("IFCCARTESIANPOINT((0.,0.))");
+  const circleAxId     = E(`IFCAXIS2PLACEMENT2D(#${circleCenterId},$)`);
+
+  const proxyIds = [];
+  const radius = diameter/2;
+
+  points.forEach(p=>{
+    const lx = p.x - baseX, ly = p.y - baseY, lz = p.z;
+    const ptId = E(`IFCCARTESIANPOINT((${lx.toFixed(4)},${ly.toFixed(4)},${lz.toFixed(4)}))`);
+    const axId = E(`IFCAXIS2PLACEMENT3D(#${ptId},$,$)`);
+    const lpId = E(`IFCLOCALPLACEMENT(#${storeyPlacementId},#${axId})`);
+
+    const profileId = E(`IFCCIRCLEPROFILEDEF(.AREA.,$,#${circleAxId},${radius.toFixed(3)})`);
+    const solidId   = E(`IFCEXTRUDEDAREASOLID(#${profileId},#${axisId},#${zDirId},${diameter.toFixed(3)})`);
+    const repId     = E(`IFCSHAPEREPRESENTATION(#${contextId},'Body','SweptSolid',(#${solidId}))`);
+    const shapeId   = E(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${repId}))`);
+
+    const proxyGuid = ifcGuid();
+    const proxyId = E(`IFCBUILDINGELEMENTPROXY(${stepStr(proxyGuid)},#${ownerId},${stepStr(p.ts)},$,'PanoramaPoint',#${lpId},#${shapeId},$,$)`);
+    proxyIds.push(proxyId);
+    records.push({ ts: p.ts, img: p.img, x: lx, y: ly, z: lz, guid: proxyGuid });
+
+    const pE  = E(`IFCPROPERTYSINGLEVALUE('Easting',$,IFCLENGTHMEASURE(${p.x.toFixed(4)}),$)`);
+    const pN  = E(`IFCPROPERTYSINGLEVALUE('Northing',$,IFCLENGTHMEASURE(${p.y.toFixed(4)}),$)`);
+    const pZ  = E(`IFCPROPERTYSINGLEVALUE('Elevation',$,IFCLENGTHMEASURE(${p.z.toFixed(4)}),$)`);
+    const pImg= E(`IFCPROPERTYSINGLEVALUE('ImagePath',$,IFCTEXT(${stepStr(p.img)}),$)`);
+    const pTs = E(`IFCPROPERTYSINGLEVALUE('Timestamp',$,IFCTEXT(${stepStr(p.ts)}),$)`);
+    const psetId = E(`IFCPROPERTYSET(${stepStr(ifcGuid())},#${ownerId},'PanoramaData',$,(#${pE},#${pN},#${pZ},#${pImg},#${pTs}))`);
+    E(`IFCRELDEFINESBYPROPERTIES(${stepStr(ifcGuid())},#${ownerId},$,$,(#${proxyId}),#${psetId})`);
+  });
+
+  E(`IFCRELCONTAINEDINSPATIALSTRUCTURE(${stepStr(ifcGuid())},#${ownerId},$,$,(${proxyIds.map(i=>'#'+i).join(',')}),#${storeyId})`);
+
+  const header = [
+    'ISO-10303-21;',
+    'HEADER;',
+    "FILE_DESCRIPTION(('Panorama capture points'),'2;1');",
+    `FILE_NAME('Panorama.ifc','${new Date().toISOString()}',('Control Point Mapper'),(''),'','Control Point Mapper','');`,
+    "FILE_SCHEMA(('IFC4'));",
+    'ENDSEC;',
+    '',
+    'DATA;'
+  ].join('\n');
+  const footer = '\nENDSEC;\n\nEND-ISO-10303-21;\n';
+
+  return { text: header + '\n' + lines.join('\n') + footer, records };
+}
+
+/* ===================== BCF topic generation (real, runs client-side) ===================== */
+async function generateBCFZip(points){
+  const zip = new JSZip();
+  zip.file('bcf.version',
+`<?xml version="1.0" encoding="UTF-8"?>
+<Version VersionId="2.1" xmlns="http://www.buildingsmart-tech.org/bcf/version/2.1"/>`);
+
+  const baseX = points[0].x, baseY = points[0].y;
+  const nowIso = new Date().toISOString();
+
+  points.forEach(p=>{
+    const topicGuid = ifcGuid();
+    const commentGuid = ifcGuid();
+    const lx = (p.x-baseX).toFixed(4), ly=(p.y-baseY).toFixed(4), lz=(p.z+1.6).toFixed(4);
+
+    const markup =
+`<?xml version="1.0" encoding="UTF-8"?>
+<Markup xmlns="http://www.buildingsmart-tech.org/bcf/version/2.1">
+  <Topic Guid="${topicGuid}" TopicType="Comment" TopicStatus="Open">
+    <Title>Panorama ${p.ts}</Title>
+    <CreationDate>${nowIso}</CreationDate>
+    <CreationAuthor>Control Point Mapper</CreationAuthor>
+  </Topic>
+  <Comment Guid="${commentGuid}">
+    <Date>${nowIso}</Date>
+    <Author>Control Point Mapper</Author>
+    <Comment>Panorama image: ${p.img}</Comment>
+  </Comment>
+  <Viewpoints Guid="${ifcGuid()}">
+    <Viewpoint>viewpoint.bcfv</Viewpoint>
+  </Viewpoints>
+</Markup>`;
+
+    const viewpoint =
+`<?xml version="1.0" encoding="UTF-8"?>
+<VisualizationInfo xmlns="http://www.buildingsmart-tech.org/bcf/version/2.1" Guid="${ifcGuid()}">
+  <PerspectiveCamera>
+    <CameraViewPoint><X>${lx}</X><Y>${ly}</Y><Z>${lz}</Z></CameraViewPoint>
+    <CameraDirection><X>0</X><Y>1</Y><Z>0</Z></CameraDirection>
+    <CameraUpVector><X>0</X><Y>0</Y><Z>1</Z></CameraUpVector>
+    <FieldOfView>60</FieldOfView>
+  </PerspectiveCamera>
+</VisualizationInfo>`;
+
+    const folder = zip.folder(topicGuid);
+    folder.file('markup.bcf', markup);
+    folder.file('viewpoint.bcfv', viewpoint);
+  });
+
+  return await zip.generateAsync({type:'blob'});
+}
+
+function downloadBlob(content, filename, mime){
+  const blob = (content instanceof Blob) ? content : new Blob([content], {type: mime || 'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('genIfcBtn').addEventListener('click', ()=>{
+  if(!currentPoints.length){ alert('No points loaded.'); return; }
+  const diameter = parseFloat(document.getElementById('diamSlider').value);
+  const result = generateIFC(currentPoints, diameter);
+  downloadBlob(result.text, 'Panorama.ifc', 'application/x-step');
+});
+
+document.getElementById('genBcfBtn').addEventListener('click', async ()=>{
+  if(!currentPoints.length){ alert('No points loaded.'); return; }
+  const btn = document.getElementById('genBcfBtn');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Generating&hellip;';
+  try{
+    const blob = await generateBCFZip(currentPoints);
+    downloadBlob(blob, 'Panorama-topics.bcfzip', 'application/zip');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+
+let lastIfcPointRecords = null;
+
+/* ===================== Upload to Trimble Connect ===================== */
+document.getElementById('uploadBtn').addEventListener('click', async () => {
+  if(!TC_TOKEN){ alert('Not connected to Trimble Connect yet.'); return; }
+  if(!currentPoints.length){ alert('No points loaded.'); return; }
+
+  const btn = document.getElementById('uploadBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Uploading&hellip;';
+  try{
+    const diameter = parseFloat(document.getElementById('diamSlider').value);
+    const result = generateIFC(currentPoints, diameter);
+    const targetFolder = selectedFolderId || await getRootFolderId();
+    lastUploadedIfcId = await uploadFileToFolder(targetFolder, 'Panorama.ifc', result.text, 'application/x-step');
+    lastIfcPointRecords = result.records;
+    document.getElementById('createBcfBtn').disabled = false;
+    const bcfBadge = document.getElementById('bcfLiveBadge');
+    if(bcfBadge){ bcfBadge.textContent = 'Connected'; bcfBadge.style.background = '#d1fae5'; bcfBadge.style.color = '#065f46'; }
+    alert('Panorama.ifc uploaded to Trimble Connect Explorer.');
+  } catch(err){
+    alert(
+      'Upload failed: ' + err.message + '\n\n' +
+      'This calls Trimble\'s documented two-step upload pattern (create file record, then PUT the bytes). ' +
+      'If the response shape differs for your org/region, this is the function to adjust: uploadFileToFolder().'
+    );
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+});
+
+/* ===================== Open in 3D Viewer ===================== */
+document.getElementById('open3dBtn').addEventListener('click', () => {
+  if(!TC_PROJECT_ID){ alert('Not connected to Trimble Connect yet.'); return; }
+  if(!lastUploadedIfcId){
+    alert('Upload Panorama.ifc to Trimble Connect first \u2014 then this button opens it directly in the 3D Viewer.');
+    return;
+  }
+  window.open(`https://web.connect.trimble.com/projects/${TC_PROJECT_ID}/viewer/3d?modelId=${lastUploadedIfcId}`, '_blank');
+});
+
+/* ===================== BCF Topics API (live) ===================== */
+function topicsBase(){ return TC_REGION_BASE + '/bcf/2.1'; }
+
+async function createBcfTopicLive(rec){
+  const topicRes = await fetch(`${topicsBase()}/projects/${TC_PROJECT_ID}/topics`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: `Panorama ${rec.ts}`, topic_type: 'Comment', topic_status: 'Open' })
+  });
+  if(!topicRes.ok) throw new Error(`topic create failed (${topicRes.status})`);
+  const topic = await topicRes.json();
+
+  const vpRes = await fetch(`${topicsBase()}/projects/${TC_PROJECT_ID}/topics/${topic.guid}/viewpoints`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      perspective_camera: {
+        camera_view_point: { x: rec.x, y: rec.y, z: rec.z + 1.6 },
+        camera_direction: { x: 0, y: 1, z: 0 },
+        camera_up_vector: { x: 0, y: 0, z: 1 },
+        field_of_view: 60
+      },
+      components: { selection: [{ ifc_guid: rec.guid }] }
+    })
+  });
+  if(!vpRes.ok) throw new Error(`viewpoint create failed (${vpRes.status})`);
+
+  const commentRes = await fetch(`${topicsBase()}/projects/${TC_PROJECT_ID}/topics/${topic.guid}/comments`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TC_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ comment: `Panorama image: ${rec.img}` })
+  });
+  if(!commentRes.ok) throw new Error(`comment create failed (${commentRes.status})`);
+
+  return topic.guid;
+}
+
+document.getElementById('createBcfBtn').addEventListener('click', async () => {
+  if(!TC_TOKEN){ alert('Not connected to Trimble Connect yet.'); return; }
+  if(!lastUploadedIfcId || !lastIfcPointRecords){
+    alert('Upload Panorama.ifc to Trimble Connect first \u2014 these topics link back to that upload\'s point objects.');
+    return;
+  }
+
+  const testMode = document.getElementById('bcfTestMode').checked;
+  const records = testMode ? lastIfcPointRecords.slice(0, 5) : lastIfcPointRecords;
+
+  if(!testMode && records.length > 50){
+    if(!confirm(`This will create ${records.length} BCF topics (3 API calls each, ~${records.length*3} requests). This can take a while. Continue?`)) return;
+  }
+
+  const btn = document.getElementById('createBcfBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  let created = 0, failed = 0;
+
+  for(const rec of records){
+    try{
+      await createBcfTopicLive(rec);
+      created++;
+    } catch(err){
+      failed++;
+      console.error('BCF topic failed for', rec.ts, err);
+    }
+    btn.innerHTML = `<span class="spin"></span>${created+failed}/${records.length}`;
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = original;
+  alert(`Created ${created} BCF topic${created===1?'':'s'} in Trimble Connect${failed ? `, ${failed} failed (see browser console for details)` : ''}.`);
+});
+
+/* ===================== Kick off Trimble Connect handshake ===================== */
+initExtension();
+
+/* ===================== Bootstrap: empty until the user picks a file ===================== */
+currentPoints = [];
+renderPoints();
+</script>
+</body>
+</html>
